@@ -9,6 +9,7 @@ import {
   Sparkles, BarChart3, Zap
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import ChainMap from '@/components/ChainMap'
 
 // ── Types ──────────────────────────────────────────
 interface StockPrice {
@@ -276,8 +277,11 @@ export default function Home() {
     if (!q.trim()) return
     setIsLoading(true)
     setError('')
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 30000)
     try {
-      const res = await fetch(`/api/stock/${encodeURIComponent(q.trim())}`)
+      const res = await fetch(`/api/stock/${encodeURIComponent(q.trim())}`, { signal: controller.signal })
+      clearTimeout(timeoutId)
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: '请求失败' }))
         throw new Error(err.error || '请求失败')
@@ -286,8 +290,13 @@ export default function Home() {
       setStockData(data)
       setLastUpdated(new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
     } catch (e: any) {
-      setError(e.message || '网络错误')
+      if (e.name === 'AbortError') {
+        setError('请求超时（30秒），后端可能卡住')
+      } else {
+        setError(e.message || '网络错误')
+      }
     } finally {
+      clearTimeout(timeoutId)
       setIsLoading(false)
     }
   }
@@ -766,13 +775,20 @@ export default function Home() {
           </div>
 
           {/* ── Industry Map (span-6) ── */}
-          <div className="card-style col-span-12 lg:col-span-6">
-            <CardHeader icon="🗺️" title="产业链地图" />
-            {isLoading ? (
-              <div className="h-16 skeleton-bar rounded" />
+          <div className="col-span-12 lg:col-span-6">
+            {stockData ? (
+              <ChainMap symbol={stockData.symbol} />
+            ) : isLoading ? (
+              <div className="card-style">
+                <CardHeader icon="🗺️" title="产业链地图" />
+                <div className="h-96 skeleton-bar rounded" />
+              </div>
             ) : (
-              <div className="text-center py-4 text-white/30 text-sm">
-                产业链地图 · {stockData?.industry || '通用'}
+              <div className="card-style">
+                <CardHeader icon="🗺️" title="产业链地图" />
+                <div className="h-48 flex items-center justify-center text-white/30 text-sm">
+                  输入股票代码查看产业链地图
+                </div>
               </div>
             )}
           </div>
