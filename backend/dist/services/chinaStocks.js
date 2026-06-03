@@ -97,6 +97,7 @@ export const CHINA_STOCKS_MAP = {
     '688111': { name: '金山办公', industry: '软件', market: '科创板' },
     '688126': { name: '沪硅产业', industry: '半导体材料', market: '科创板' },
     '688981': { name: '中芯国际', industry: '半导体制造', market: '科创板' },
+    '688502': { name: '路维光电', industry: '半导体', market: '科创板' },
     // 深交所
     '000001': { name: '平安银行', industry: '银行', market: '深交所' },
     '000002': { name: '万科A', industry: '房地产', market: '深交所' },

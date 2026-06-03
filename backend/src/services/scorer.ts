@@ -17,7 +17,12 @@ export interface StockData {
     low: number
     pe: number
     pb: number
+    ps: number
+    peg: number
     marketCap: number
+    roe: number
+    revenueGrowth: number
+    profitGrowth: number
     history: Array<{ date: string; close: number; open: number; high: number; low: number; volume: number }>
   }
   kline: {
@@ -88,6 +93,9 @@ export interface ScoreResult {
     ps: number
     peg: number
     marketCap: number
+    roe: number
+    revenueGrowth: number
+    profitGrowth: number
   }
   
   updatedAt: string
@@ -169,7 +177,10 @@ export function calculateScores(data: StockData): ScoreResult {
         pb: price.pb,
         ps: (price as any).ps ?? 0,
         peg: (price as any).peg ?? 0,
-        marketCap: price.marketCap
+        marketCap: price.marketCap,
+        roe: (price as any).roe ?? 0,
+        revenueGrowth: (price as any).revenueGrowth ?? 0,
+        profitGrowth: (price as any).profitGrowth ?? 0
       },
       kline: kline as any,
       updatedAt: new Date().toISOString()

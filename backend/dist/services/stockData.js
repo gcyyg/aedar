@@ -124,7 +124,12 @@ async function fetchChinaPrice(symbol) {
             low: latest.low,
             pe: 0, // 需要单独的 API
             pb: 0,
+            ps: 0,
+            peg: 0,
             marketCap: 0,
+            roe: 0,
+            revenueGrowth: 0,
+            profitGrowth: 0,
             history: items
         };
     }
@@ -206,7 +211,12 @@ async function fetchUsPrice(symbol) {
             low: q.l,
             pe: metrics.peBasicExclExtraTTM || 0,
             pb: metrics.pbWeekly || 0,
+            ps: metrics.psRatioTTM || 0,
+            peg: metrics.pegTrailingTTM || 0,
             marketCap: metrics.marketCapitalizationAin || 0,
+            roe: metrics.roeBasicExclExtraTTMAnn || 0,
+            revenueGrowth: metrics.revenueGrowthTTMYoy || metrics.revenueGrowth3Y || 0,
+            profitGrowth: metrics.epsGrowthTTMYoy || metrics.epsGrowth3Y || 0,
             history: []
         };
     }
@@ -216,34 +226,72 @@ async function fetchUsPrice(symbol) {
     }
 }
 async function fetchUsKLine(symbol, period) {
+    // console.log(`[fetchUsKLine] calling AlphaVantage for ${symbol}`)
     try {
-        // 使用 Finnhub 的技术指标
-        const resolution = period === 'daily' ? 'D' : period === 'weekly' ? 'W' : 'M';
-        const res = await axios.get(`https://finnhub.io/api/v1/stock/candle`, {
+        const res = await axios.get(`https://www.alphavantage.co/query`, {
             params: {
+                function: 'TIME_SERIES_DAILY',
                 symbol,
-                resolution,
-                from: Math.floor(Date.now() / 1000 - 365 * 24 * 3600),
-                to: Math.floor(Date.now() / 1000),
-                token: FINNHUB_KEY
-            }
+                outputsize: 'compact', // 免费版仅支持 compact（100条）
+                apikey: 'G8IYR0VLFJNTZHDS'
+            },
+            timeout: 8000
         });
-        if (res.data.s !== 'ok' || !res.data.t?.length)
+        const info = res.data['Information'];
+        if (info) {
+            console.log(`AlphaVantage limit: ${info}`);
             return null;
-        const data = res.data.t.map((t, i) => ({
-            date: new Date(t * 1000).toISOString().split('T')[0],
-            open: res.data.o[i],
-            high: res.data.h[i],
-            low: res.data.l[i],
-            close: res.data.c[i],
-            volume: res.data.v[i]
-        }));
-        return { data, ma: calculateMA(data) };
+        }
+        const timeSeries = res.data['Time Series (Daily)'];
+        if (timeSeries) {
+            const entries = Object.entries(timeSeries);
+            console.log(`AlphaV entries count: ${entries.length}`);
+            if (entries.length > 0) {
+                const data = entries.map(([date, vals]) => ({
+                    date,
+                    open: parseFloat(vals['1. open']),
+                    high: parseFloat(vals['2. high']),
+                    low: parseFloat(vals['3. low']),
+                    close: parseFloat(vals['4. close']),
+                    volume: parseInt(vals['5. volume'])
+                }));
+                // 按日期升序排列
+                data.sort((a, b) => a.date.localeCompare(b.date));
+                return { data, ma: calculateMA(data) };
+            }
+        }
     }
     catch (e) {
-        console.error('Finnhub candle error:', e.message);
-        return null;
+        console.error('AlphaVantage kline error:', e.message);
     }
+    // ── 方案二：yfinance（无需API key）────────────────────────────
+    try {
+        const res = await axios.get(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`, {
+            params: { interval: '1d', range: '2y' },
+            timeout: 8000
+        });
+        const chart = res.data?.chart?.result?.[0];
+        if (chart) {
+            const timestamps = chart.timestamp;
+            const quotes = chart.indicators?.quote?.[0];
+            const volumes = chart.indicators?.quote?.[0]?.volume || [];
+            if (timestamps?.length) {
+                const data = timestamps.map((t, i) => ({
+                    date: new Date(t * 1000).toISOString().split('T')[0],
+                    open: quotes.open[i],
+                    high: quotes.high[i],
+                    low: quotes.low[i],
+                    close: quotes.close[i],
+                    volume: volumes[i] || 0
+                })).filter((d) => d.close != null);
+                return { data, ma: calculateMA(data) };
+            }
+        }
+    }
+    catch (e) {
+        console.error('yfinance kline error:', e.message);
+    }
+    return null;
 }
 // ===== 工具函数 =====
 function calculateMA(data) {

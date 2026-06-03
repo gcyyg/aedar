@@ -7,11 +7,11 @@ export function calculateScores(data) {
     // 2. 成长性评分
     const growthScore = calculateGrowthScore(price);
     // 3. 估值评分
-    const valuationScore = calculateValuationScore(price);
+    const valuationScore = calculateValuationScore(price, (kline?.data ?? []));
     // 4. 风险评分
     const riskScore = calculateRiskScore(price);
     // 5. 市场温度
-    const marketTemp = calculateMarketTemp(price);
+    const marketTemp = calculateMarketTemp(price, kline);
     // 6. 均线评估
     const maEvaluation = calculateMAEval(kline, price);
     // 7. 综合评分
@@ -20,7 +20,7 @@ export function calculateScores(data) {
         valuationScore * 0.25 +
         riskScore * 0.25);
     // 8. Cedar 等级
-    const cedarLevel = getCedarLevel(cedarScore);
+    const maEval = calculateMAEval(kline, price);
     // 9. 中美映射
     const chinaUsMapping = getChinaUsMapping(basic.symbol, basic.industry);
     // 10. 赛道归属
@@ -29,7 +29,7 @@ export function calculateScores(data) {
         symbol: basic.symbol,
         name: basic.name,
         cedarScore,
-        cedarLevel,
+        cedarLevel: getCedarLevel(cedarScore),
         trackScore,
         trackLevel: getTrackLevel(trackScore),
         growthScore,
@@ -40,7 +40,14 @@ export function calculateScores(data) {
         riskLevel: getRiskLevel(riskScore),
         marketTemp,
         marketTempLevel: getMarketTempLevel(marketTemp),
-        maEvaluation,
+        maEvaluation: {
+            ma30: maEval.ma30,
+            ma60: maEval.ma60,
+            ma120: maEval.ma120,
+            ma240: maEval.ma240,
+            overall: maEval.overall,
+        },
+        maExplanation: maEval.explanation,
         industry: basic.industry,
         industryTrack: trackInfo.track,
         industryTrackLabel: trackInfo.trackLabel,
@@ -52,8 +59,14 @@ export function calculateScores(data) {
             changePercent: price.changePercent,
             pe: price.pe,
             pb: price.pb,
-            marketCap: price.marketCap
+            ps: price.ps ?? 0,
+            peg: price.peg ?? 0,
+            marketCap: price.marketCap,
+            roe: price.roe ?? 0,
+            revenueGrowth: price.revenueGrowth ?? 0,
+            profitGrowth: price.profitGrowth ?? 0
         },
+        kline: kline,
         updatedAt: new Date().toISOString()
     };
 }
@@ -62,39 +75,62 @@ export function calculateScores(data) {
 const INDUSTRY_HEAT = {
     // 🔥 S级热门赛道
     'AI': { heat: 95, track: 'S' }, '人工智能': { heat: 95, track: 'S' },
+    'Semiconductors': { heat: 92, track: 'S' }, // 英伟达/AMD等
+    'Technology': { heat: 88, track: 'S' },
     '半导体': { heat: 88, track: 'S' }, '集成电路': { heat: 90, track: 'S' },
     '芯片': { heat: 88, track: 'S' }, '算力': { heat: 88, track: 'S' },
     '低空经济': { heat: 85, track: 'S' }, '新能源汽车': { heat: 85, track: 'S' },
+    'Auto Manufacturers': { heat: 85, track: 'S' },
+    'Electric Vehicles': { heat: 85, track: 'S' },
     '智能汽车': { heat: 85, track: 'S' }, '机器人': { heat: 83, track: 'S' },
+    'Robotics': { heat: 83, track: 'S' },
     '商业航天': { heat: 82, track: 'S' }, '光通信': { heat: 80, track: 'S' },
     // ⭐ A级成长赛道
     '电动车': { heat: 83, track: 'A' }, '云计算': { heat: 82, track: 'A' },
+    'Software - Application': { heat: 82, track: 'A' }, 'Software - Infrastructure': { heat: 82, track: 'A' },
+    'Innovation Technology': { heat: 80, track: 'A' },
     '创新药': { heat: 80, track: 'A' }, '医疗器械': { heat: 76, track: 'A' },
+    'Biotechnology': { heat: 80, track: 'A' }, 'Pharmaceuticals': { heat: 76, track: 'A' },
     '储能': { heat: 74, track: 'A' }, '消费电子': { heat: 72, track: 'A' },
+    'Consumer Electronics': { heat: 72, track: 'A' },
     '新能源': { heat: 75, track: 'A' }, '氢能源': { heat: 70, track: 'A' },
+    'Clean Energy': { heat: 75, track: 'A' }, 'Solar': { heat: 68, track: 'B' },
     '生物医药': { heat: 78, track: 'A' }, '量子科技': { heat: 78, track: 'A' },
     '军工': { heat: 68, track: 'A' }, '国防军工': { heat: 68, track: 'A' },
+    'Aerospace & Defense': { heat: 68, track: 'A' },
     '航空装备': { heat: 67, track: 'A' }, '软件服务': { heat: 68, track: 'A' },
     '大数据': { heat: 80, track: 'A' }, '数据中心': { heat: 75, track: 'A' },
+    'Internet Software & Services': { heat: 80, track: 'A' }, 'Cloud': { heat: 80, track: 'A' },
     // 📊 B级稳定赛道
     '光伏': { heat: 68, track: 'B' }, '苹果产业链': { heat: 70, track: 'B' },
-    '电子元件': { heat: 66, track: 'B' }, '通信设备': { heat: 65, track: 'B' },
+    'Electronic Components': { heat: 66, track: 'B' }, '通信设备': { heat: 65, track: 'B' },
+    'Telecom Equipment': { heat: 65, track: 'B' },
     '游戏': { heat: 64, track: 'B' }, '5G': { heat: 63, track: 'B' },
+    'Interactive Media & Services': { heat: 64, track: 'B' },
     '风电': { heat: 65, track: 'B' }, '互联网服务': { heat: 67, track: 'B' },
+    'Healthcare': { heat: 58, track: 'B' },
     '医疗服务': { heat: 58, track: 'B' }, '中药': { heat: 52, track: 'B' },
     '化学制药': { heat: 50, track: 'B' }, '白酒': { heat: 55, track: 'B' },
+    'Liquor': { heat: 55, track: 'B' },
     '化妆品': { heat: 55, track: 'B' }, '食品饮料': { heat: 55, track: 'B' },
     '家电': { heat: 52, track: 'B' }, '乳品': { heat: 50, track: 'B' },
     '证券': { heat: 50, track: 'B' }, '保险': { heat: 48, track: 'B' },
     // 📉 C级冷门赛道
-    '银行': { heat: 45, track: 'C' }, '家居': { heat: 48, track: 'C' },
-    '建筑工程': { heat: 45, track: 'C' }, '建材': { heat: 40, track: 'C' },
-    '电力': { heat: 40, track: 'C' }, '化工': { heat: 40, track: 'C' },
+    'Banks': { heat: 45, track: 'C' }, '银行': { heat: 45, track: 'C' },
+    'Financials': { heat: 48, track: 'C' },
+    '家居': { heat: 48, track: 'C' }, '建筑工程': { heat: 45, track: 'C' },
+    '建材': { heat: 40, track: 'C' }, '电力': { heat: 40, track: 'C' },
+    'Utilities': { heat: 40, track: 'C' },
+    '化工': { heat: 40, track: 'C' }, 'Chemicals': { heat: 40, track: 'C' },
     '航空': { heat: 35, track: 'C' }, '机场': { heat: 38, track: 'C' },
+    'Airlines': { heat: 35, track: 'C' }, 'Air Transport': { heat: 35, track: 'C' },
     '房地产': { heat: 30, track: 'C' }, '钢铁': { heat: 30, track: 'C' },
+    'Real Estate': { heat: 30, track: 'C' }, 'Steel': { heat: 30, track: 'C' },
     '煤炭': { heat: 28, track: 'C' }, '石油': { heat: 35, track: 'C' },
-    '造纸': { heat: 30, track: 'C' }, '纺织服装': { heat: 28, track: 'C' },
+    'Oil & Gas': { heat: 35, track: 'C' }, 'Coal': { heat: 28, track: 'C' },
+    '造纸': { heat: 30, track: 'C' }, '纺织服装': { heat: 28, track: 'B' },
     '公路铁路': { heat: 32, track: 'C' }, '火电': { heat: 35, track: 'C' },
+    'Retail': { heat: 50, track: 'B' }, 'REITs': { heat: 45, track: 'C' },
 };
 export function getIndustryTrackInfo(industry) {
     const info = INDUSTRY_HEAT[industry];
@@ -232,35 +268,91 @@ function calculateGrowthScore(price) {
     }
     return Math.min(100, Math.max(0, score));
 }
-function calculateValuationScore(price) {
-    let score = 50;
-    // PE 评分
-    if (price.pe > 0) {
-        if (price.pe < 10)
-            score += 25;
-        else if (price.pe < 15)
+function calculateValuationScore(price, history) {
+    let score = 0;
+    // ── 维度一：股价历史分位（权重最大）──────────────────
+    // 股价越接近历史低点，分位越低 → 估值机会越大 → 分数越高
+    let pricePercentile = 50; // 默认50%分位
+    if (history.length >= 60) {
+        const closes = history.map(d => d.close).sort((a, b) => a - b);
+        const current = price.current;
+        // 计算当前价格在历史价位中的分位（0%=最低点，100%=最高点）
+        const below = closes.filter(c => c <= current).length;
+        pricePercentile = (below / closes.length) * 100;
+        // 低价区（<30%分位）高分，高价区（>70%分位）低分
+        if (pricePercentile <= 15)
+            score += 40; // 接近历史最低价，极佳买点
+        else if (pricePercentile <= 30)
+            score += 30;
+        else if (pricePercentile <= 45)
             score += 20;
-        else if (price.pe < 20)
-            score += 15;
-        else if (price.pe < 30)
+        else if (pricePercentile <= 60)
             score += 5;
-        else if (price.pe < 50)
+        else if (pricePercentile <= 75)
             score -= 10;
-        else if (price.pe < 100)
-            score -= 20;
         else
-            score -= 30;
+            score -= 25; // 接近历史最高价，高位风险大
     }
-    // PB 评分
+    else {
+        score += 15; // 数据不足，给中间偏正
+    }
+    // ── 维度二：PE（成长预期折现）────────────────────────
+    if (price.pe > 0 && price.pe < 500) {
+        if (price.pe <= 10)
+            score += 20; // 极低估
+        else if (price.pe <= 20)
+            score += 12; // 合理偏低
+        else if (price.pe <= 30)
+            score += 5; // 合理区间
+        else if (price.pe <= 50)
+            score -= 5; // 略偏高
+        else if (price.pe <= 100)
+            score -= 15; // 高估
+        else
+            score -= 25; // 极度高估
+    }
+    else if (price.pe <= 0) {
+        score += 5; // 亏损股，PE无效但也不扣分太狠
+    }
+    // ── 维度三：PB（资产价值底线）────────────────────────
     if (price.pb > 0) {
         if (price.pb < 1)
-            score += 15;
+            score += 12; // 破净，极具资产价值
         else if (price.pb < 2)
-            score += 10;
+            score += 8;
         else if (price.pb < 3)
-            score += 5;
-        else if (price.pb > 5)
+            score += 3;
+        else if (price.pb < 5)
+            score -= 3;
+        else
             score -= 10;
+    }
+    // ── 维度四：PS（营收倍数，低估值成长股参考）────────────
+    if (price.ps ?? 0 > 0) {
+        if (price.ps ?? 0 < 2)
+            score += 8; // 营收倍数极低
+        else if (price.ps ?? 0 < 5)
+            score += 4;
+        else if (price.ps ?? 0 < 10)
+            score -= 2;
+        else
+            score -= 8;
+    }
+    // ── 维度五：PEG（成长匹配度）──────────────────────────
+    if (price.peg ?? 0 > 0) {
+        if (price.peg ?? 0 <= 0.5)
+            score += 8; // 成长被严重低估
+        else if (price.peg ?? 0 <= 1)
+            score += 4;
+        else if (price.peg ?? 0 <= 1.5)
+            score += 0;
+        else if (price.peg ?? 0 <= 2.5)
+            score -= 5;
+        else
+            score -= 10;
+    }
+    else if (price.peg ?? 0 < 0) {
+        score -= 5; // 负 PEG，盈利下滑
     }
     return Math.min(100, Math.max(0, score));
 }
@@ -290,10 +382,20 @@ function calculateRiskScore(price) {
     }
     return Math.min(100, Math.max(0, score));
 }
-function calculateMarketTemp(price) {
-    // 简化的市场温度计
-    // 基于价格相对52周高点的位置
-    if (price.high > 0) {
+function calculateMarketTemp(price, kline) {
+    // 基于K线历史数据计算价格位置
+    if (kline && kline.data.length >= 20) {
+        const closes = kline.data.map(d => d.close);
+        const current = closes[closes.length - 1];
+        const high = Math.max(...closes);
+        const low = Math.min(...closes);
+        if (high > low) {
+            const position = (current - low) / (high - low);
+            return Math.round(position * 100);
+        }
+    }
+    // 回退：用当日高低
+    if (price.high > price.low) {
         const position = (price.current - price.low) / (price.high - price.low);
         return Math.round(position * 100);
     }
@@ -307,13 +409,30 @@ function calculateMAEval(kline, price) {
         ma240: 'neutral',
         overall: 'neutral'
     };
-    if (!kline || kline.data.length < 10)
-        return result;
+    if (!kline || kline.data.length < 10) {
+        return {
+            ...result,
+            explanation: { trend: '数据不足', signal: '暂无信号', advice: '等待更多数据' }
+        };
+    }
+    const closes = kline.data.map(d => d.close);
     const current = price.current;
     const ma30 = kline.ma.ma30[kline.ma.ma30.length - 1];
     const ma60 = kline.ma.ma60[kline.ma.ma60.length - 1];
     const ma120 = kline.ma.ma120[kline.ma.ma120.length - 1];
     const ma240 = kline.ma.ma240[kline.ma.ma240.length - 1];
+    // 各均线方向（最近5个值的变化趋势）
+    const maSlope = (arr, n = 5) => {
+        if (arr.length < n)
+            return 0;
+        const slice = arr.slice(-n);
+        return (slice[slice.length - 1] - slice[0]) / slice[0];
+    };
+    const ma30Slope = maSlope(kline.ma.ma30);
+    const ma60Slope = maSlope(kline.ma.ma60);
+    const ma120Slope = maSlope(kline.ma.ma120);
+    const ma240Slope = maSlope(kline.ma.ma240);
+    // 价格vs均线
     if (current > ma30)
         result.ma30 = 'bull';
     else if (current < ma30)
@@ -331,11 +450,61 @@ function calculateMAEval(kline, price) {
     else if (current < ma240)
         result.ma240 = 'bear';
     const bullish = [result.ma30, result.ma60, result.ma120, result.ma240].filter(m => m === 'bull').length;
-    if (bullish >= 3)
+    const risingMAs = [ma30Slope, ma60Slope, ma120Slope, ma240Slope].filter(s => s > 0.005).length;
+    const fallingMAs = [ma30Slope, ma60Slope, ma120Slope, ma240Slope].filter(s => s < -0.005).length;
+    if (bullish >= 3 && risingMAs >= 3)
+        result.overall = 'bull';
+    else if (bullish <= 1 && fallingMAs >= 3)
+        result.overall = 'bear';
+    else if (bullish >= 3)
         result.overall = 'bull';
     else if (bullish <= 1)
         result.overall = 'bear';
-    return result;
+    // ── 生成指导性解释 ──
+    const aboveAll = result.ma30 === 'bull' && result.ma60 === 'bull' && result.ma120 === 'bull' && result.ma240 === 'bull';
+    const belowAll = result.ma30 === 'bear' && result.ma60 === 'bear' && result.ma120 === 'bear' && result.ma240 === 'bear';
+    let trend;
+    let signal;
+    let advice;
+    if (aboveAll && result.overall === 'bull') {
+        trend = '多头排列，均线系统全面看涨';
+        signal = '所有均线呈上升趋势，价在所有均线之上';
+        advice = '持有为主，回调至MA30附近可加仓，跌破MA60需警惕';
+    }
+    else if (belowAll && result.overall === 'bear') {
+        trend = '空头排列，均线系统全面看跌';
+        signal = '所有均线呈下降趋势，价在所有均线之下';
+        advice = '观望为主，突破MA30前不轻易入场';
+    }
+    else if (result.ma30 === 'bull' && result.ma60 === 'bull' && result.ma120 === 'bear') {
+        trend = '短期反弹，中期压力';
+        signal = '短线均线多头，但MA120仍构成压制';
+        advice = '轻仓参与反弹，MA120处注意获利了结';
+    }
+    else if (result.ma30 === 'bear' && result.ma60 === 'bear' && result.ma120 === 'bull') {
+        trend = '中期震荡，底部抬升';
+        signal = '短期回调，但中长期均线仍向上';
+        advice = '逢低布局，MA30收复后可加仓';
+    }
+    else if (result.overall === 'bull') {
+        trend = '震荡偏多';
+        signal = '多数均线多头，部分均线方向分歧';
+        advice = '区间震荡操作，高抛低吸，突破后跟进';
+    }
+    else if (result.overall === 'bear') {
+        trend = '震荡偏空';
+        signal = '多数均线空头，短期或有反弹';
+        advice = '谨慎观望，等待底部信号明确';
+    }
+    else {
+        trend = '方向不明';
+        signal = '多空均线交错，无明确趋势';
+        advice = '观望为主，避免追涨杀跌';
+    }
+    return {
+        ...result,
+        explanation: { trend, signal, advice }
+    };
 }
 function getCedarLevel(score) {
     if (score >= 90)

@@ -133,7 +133,12 @@ async function fetchChinaPrice(symbol: string): Promise<StockData['price'] | nul
       low: latest.low,
       pe: 0,  // 需要单独的 API
       pb: 0,
+      ps: 0,
+      peg: 0,
       marketCap: 0,
+      roe: 0,
+      revenueGrowth: 0,
+      profitGrowth: 0,
       history: items
     }
   } catch (e: any) {
@@ -226,8 +231,8 @@ async function fetchUsPrice(symbol: string): Promise<StockData['price'] | null> 
       peg: metrics.pegTrailingTTM || 0,
       marketCap: metrics.marketCapitalizationAin || 0,
       roe: metrics.roeBasicExclExtraTTMAnn || 0,
-      revenueGrowth: metrics.revenueGrowthTTM || 0,
-      profitGrowth: metrics.netIncomeGrowthTTM || 0,
+      revenueGrowth: metrics.revenueGrowthTTMYoy || metrics.revenueGrowth3Y || 0,
+      profitGrowth: metrics.epsGrowthTTMYoy || metrics.epsGrowth3Y || 0,
       history: []
     }
   } catch (e: any) {
