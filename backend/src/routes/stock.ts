@@ -10,22 +10,11 @@ export async function stockRoutes(app: FastifyInstance) {
     const upperSymbol = symbol.toUpperCase()
 
     try {
-      // 先查缓存
-      const cacheKey = `stock:score:${upperSymbol}`
-      const cached = cache.get(cacheKey)
-      if (cached) {
-        reply.header('X-Cache', 'HIT')
-        return cached
-      }
-
-      // 调用评分服务
+      // getStockData 内部处理缓存 + AI 摘要生成
       const result = await getStockData(upperSymbol)
       if (!result) {
         return reply.status(404).send({ error: '股票代码不存在或数据获取失败', symbol: upperSymbol })
       }
-
-      // 缓存结果 (1小时)
-      cache.set(cacheKey, result, 3600)
 
       reply.header('X-Cache', 'MISS')
       return result

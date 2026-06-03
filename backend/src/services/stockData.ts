@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { cache, cacheKeys } from './cache.js'
 import { calculateScores, type StockData, type ScoreResult } from './scorer.js'
+import { generateStockSummary } from './aiSummary.js'
 
 // API 配置
 const TUSHARE_TOKEN = '51fbaa947c34a4caa000e1323fa20153f93a34b1fea1f6b98196e59e'
@@ -80,7 +81,7 @@ async function fetchChinaStock(symbol: string): Promise<StockData['basic'] | nul
     
     const [ts_code, sym, name, area, industry, market] = res.data.data.items[0]
     return { symbol: sym, name, market, industry, area }
-  } catch (e) {
+  } catch (e: any) {
     console.error('TuShare stock_basic error:', e.message)
     return null
   }
@@ -117,7 +118,7 @@ async function fetchChinaPrice(symbol: string): Promise<StockData['price'] | nul
       marketCap: 0,
       history: items
     }
-  } catch (e) {
+  } catch (e: any) {
     console.error('TuShare daily error:', e.message)
     return null
   }
@@ -148,7 +149,7 @@ async function fetchChinaKLine(symbol: string, period: string): Promise<StockDat
       data,
       ma: calculateMA(data)
     }
-  } catch (e) {
+  } catch (e: any) {
     console.error('TuShare kline error:', e.message)
     return null
   }
@@ -171,7 +172,7 @@ async function fetchUsStock(symbol: string): Promise<StockData['basic'] | null> 
       industry: res.data.finnhubIndustry || 'Unknown',
       area: res.data.country || 'US'
     }
-  } catch (e) {
+  } catch (e: any) {
     console.error('Finnhub profile error:', e.message)
     return null
   }
@@ -206,7 +207,7 @@ async function fetchUsPrice(symbol: string): Promise<StockData['price'] | null> 
       marketCap: metrics.marketCapitalizationAin || 0,
       history: []
     }
-  } catch (e) {
+  } catch (e: any) {
     console.error('Finnhub quote error:', e.message)
     return null
   }
@@ -239,7 +240,7 @@ async function fetchUsKLine(symbol: string, period: string): Promise<StockData['
     }))
 
     return { data, ma: calculateMA(data) }
-  } catch (e) {
+  } catch (e: any) {
     console.error('Finnhub candle error:', e.message)
     return null
   }
@@ -293,5 +294,32 @@ export async function getStockData(symbol: string): Promise<ScoreResult | null> 
 
   const stockData: StockData = { basic, price, kline, risk: null }
 
-  return calculateScores(stockData)
+  const scoreResult = calculateScores(stockData)
+
+  // 生成 AI 摘要 (同步等待，确保首次返回完整数据)
+  try {
+    const summary = await generateStockSummary(
+      scoreResult.symbol,
+      scoreResult.name,
+      scoreResult.cedarScore,
+      scoreResult.cedarLevel,
+      scoreResult.trackScore,
+      scoreResult.growthScore,
+      scoreResult.valuationScore,
+      scoreResult.riskScore,
+      scoreResult.marketTemp,
+      scoreResult.price,
+      scoreResult.industry,
+      scoreResult.maEvaluation
+    )
+    scoreResult.summary = summary
+  } catch (err) {
+    console.error('AI summary generation failed:', err)
+  }
+
+  // 缓存结果 (1小时)
+  const cacheKey = `stock:score:${symbol.toUpperCase()}`
+  cache.set(cacheKey, scoreResult, 3600)
+
+  return scoreResult
 }

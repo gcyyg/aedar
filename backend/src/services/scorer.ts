@@ -264,12 +264,12 @@ function calculateMarketTemp(price: StockData['price']): number {
 }
 
 function calculateMAEval(kline: StockData['kline'], price: StockData['price']): ScoreResult['maEvaluation'] {
-  const result = {
-    ma30: 'neutral' as const,
-    ma60: 'neutral' as const,
-    ma120: 'neutral' as const,
-    ma240: 'neutral' as const,
-    overall: 'neutral' as const
+  const result: ScoreResult['maEvaluation'] = {
+    ma30: 'neutral',
+    ma60: 'neutral',
+    ma120: 'neutral',
+    ma240: 'neutral',
+    overall: 'neutral'
   }
   
   if (!kline || kline.data.length < 10) return result
