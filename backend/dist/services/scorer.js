@@ -1,4 +1,3 @@
-// 评分引擎
 // ===== 评分计算 =====
 export function calculateScores(data) {
     const { basic, price, kline } = data;
@@ -52,7 +51,7 @@ export function calculateScores(data) {
         industryTrack: trackInfo.track,
         industryTrackLabel: trackInfo.trackLabel,
         chinaUsMapping,
-        summary: '',
+        summary: [],
         price: {
             current: price.current,
             change: price.change,

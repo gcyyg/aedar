@@ -1,3 +1,4 @@
+import type { DimensionSummary } from './aiSummary.js'
 // 评分引擎
 
 export interface StockData {
@@ -77,7 +78,7 @@ export interface ScoreResult {
   industryTrackLabel: string               // 赛道标签
   chinaUsMapping: string | null
   
-  summary: string             // AI 摘要 (预留)
+  summary: DimensionSummary[]             // AI 摘要 (预留)
 
   kline: {                   // K线数据 (用于图表展示)
     data: Array<{ date: string; close: number; open: number; high: number; low: number; volume: number }>
@@ -168,7 +169,7 @@ export function calculateScores(data: StockData): ScoreResult {
       industryTrack: trackInfo.track,
       industryTrackLabel: trackInfo.trackLabel,
       chinaUsMapping,
-      summary: '',
+      summary: [] as DimensionSummary[],
       price: {
         current: price.current,
         change: price.change,

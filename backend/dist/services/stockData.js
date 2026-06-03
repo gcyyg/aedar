@@ -337,8 +337,8 @@ export async function getStockData(symbol) {
     const scoreResult = calculateScores(stockData);
     // 生成 AI 摘要 (同步等待，确保首次返回完整数据)
     try {
-        const summary = await generateStockSummary(scoreResult.symbol, scoreResult.name, scoreResult.cedarScore, scoreResult.cedarLevel, scoreResult.trackScore, scoreResult.growthScore, scoreResult.valuationScore, scoreResult.riskScore, scoreResult.marketTemp, scoreResult.price, scoreResult.industry, scoreResult.maEvaluation);
-        scoreResult.summary = summary;
+        const summaries = await generateStockSummary(scoreResult.symbol, scoreResult.name, scoreResult.cedarScore, scoreResult.cedarLevel, scoreResult.trackScore, scoreResult.growthScore, scoreResult.valuationScore, scoreResult.riskScore, scoreResult.marketTemp, scoreResult.price, scoreResult.industry, scoreResult.industryTrack, scoreResult.maEvaluation, scoreResult.chinaUsMapping);
+        scoreResult.summary = summaries;
     }
     catch (err) {
         console.error('AI summary generation failed:', err);

@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { cache, cacheKeys } from './cache.js'
 import { calculateScores, type StockData, type ScoreResult } from './scorer.js'
-import { generateStockSummary } from './aiSummary.js'
+import { generateStockSummary, type DimensionSummary } from './aiSummary.js'
 import { getChinaStockBasic } from './chinaStocks.js'
 
 // API 配置
@@ -364,7 +364,7 @@ export async function getStockData(symbol: string): Promise<ScoreResult | null> 
 
   // 生成 AI 摘要 (同步等待，确保首次返回完整数据)
   try {
-    const summary = await generateStockSummary(
+    const summaries = await generateStockSummary(
       scoreResult.symbol,
       scoreResult.name,
       scoreResult.cedarScore,
@@ -376,9 +376,11 @@ export async function getStockData(symbol: string): Promise<ScoreResult | null> 
       scoreResult.marketTemp,
       scoreResult.price,
       scoreResult.industry,
-      scoreResult.maEvaluation
+      scoreResult.industryTrack,
+      scoreResult.maEvaluation,
+      scoreResult.chinaUsMapping
     )
-    scoreResult.summary = summary
+    scoreResult.summary = summaries
   } catch (err) {
     console.error('AI summary generation failed:', err)
   }
