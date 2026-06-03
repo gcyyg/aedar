@@ -806,10 +806,20 @@ export default function Home() {
               <div className="space-y-2">
                 {[1,2,3,4].map(i => <div key={i} className="h-4 skeleton-bar rounded" style={{ width: `${70 + Math.random() * 30}%` }} />)}
               </div>
-            ) : (
-              <div className="text-sm text-white/70 leading-relaxed whitespace-pre-line">
-                {stockData?.summary || '输入股票代码开始分析...'}
+            ) : stockData?.summary ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {stockData.summary.map((item: any, i: number) => (
+                  <div key={i} className="bg-white/[0.04] border border-white/[0.08] rounded-lg p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-base">{item.icon}</span>
+                      <span className="text-sm font-semibold text-white">{item.label}</span>
+                    </div>
+                    <p className="text-sm text-white/60 leading-relaxed">{item.summary}</p>
+                  </div>
+                ))}
               </div>
+            ) : (
+              <div className="text-sm text-white/50 text-center py-4">输入股票代码开始分析...</div>
             )}
             {stockData && (
               <div className="mt-4 p-3 rounded-lg bg-[rgba(255,170,0,0.08)] border border-[rgba(255,170,0,0.2)]">

@@ -218,6 +218,16 @@ async function fetchUsPrice(symbol: string): Promise<StockData['price'] | null> 
 
     const metrics = metricRes.data?.metric || {}
 
+    // Finnhub 实际字段名
+    const mcap = metrics.marketCapitalization    // 市值（百万）
+    const pbVal = metrics.pb                     // 市净率
+    const psVal = metrics.psRatioTTM || metrics.evRevenueTTM  // 市销率
+    const pegVal = metrics.pegTTM || metrics.forwardPEG  // PEG
+    const roeVal = metrics.roeBasicExclExtraTTMAnn || (metrics.netProfitMarginAnnual && metrics.assetTurnoverAnnual ? 
+      (metrics.netProfitMarginAnnual * metrics.assetTurnoverAnnual / 10) : null)  // ROE
+    const revGrowth = metrics.revenueGrowthTTMYoy || metrics.revenueGrowth5Y
+    const profitGrowth = metrics.epsGrowthTTMYoy || metrics.epsGrowthQuarterlyYoy
+
     return {
       current: q.c,
       change: q.d,
@@ -225,14 +235,14 @@ async function fetchUsPrice(symbol: string): Promise<StockData['price'] | null> 
       volume: metrics['vol10dAvg'] || 0,
       high: q.h,
       low: q.l,
-      pe: metrics.peBasicExclExtraTTM || 0,
-      pb: metrics.pbWeekly || 0,
-      ps: metrics.psRatioTTM || 0,
-      peg: metrics.pegTrailingTTM || 0,
-      marketCap: metrics.marketCapitalizationAin || 0,
-      roe: metrics.roeBasicExclExtraTTMAnn || 0,
-      revenueGrowth: metrics.revenueGrowthTTMYoy || metrics.revenueGrowth3Y || 0,
-      profitGrowth: metrics.epsGrowthTTMYoy || metrics.epsGrowth3Y || 0,
+      pe: metrics.peBasicExclExtraTTM || metrics.peTTM || 0,
+      pb: pbVal || 0,
+      ps: psVal || 0,
+      peg: pegVal || 0,
+      marketCap: mcap ? mcap * 1_000_000 : 0,  // 转为完整数值
+      roe: roeVal || 0,
+      revenueGrowth: revGrowth || 0,
+      profitGrowth: profitGrowth || 0,
       history: []
     }
   } catch (e: any) {
