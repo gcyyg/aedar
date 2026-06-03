@@ -60,11 +60,24 @@ export interface ScoreResult {
     ma240: 'bull' | 'bear' | 'neutral'
     overall: 'bull' | 'bear' | 'neutral'
   }
+
+  maExplanation: {           // 均线趋势解释
+    trend: string            // 趋势总述
+    signal: string          // 信号描述
+    advice: string          // 操作建议
+  }
   
   industry: string
+  industryTrack: 'S' | 'A' | 'B' | 'C'   // 赛道归属等级
+  industryTrackLabel: string               // 赛道标签
   chinaUsMapping: string | null
   
   summary: string             // AI 摘要 (预留)
+
+  kline: {                   // K线数据 (用于图表展示)
+    data: Array<{ date: string; close: number; open: number; high: number; low: number; volume: number }>
+    ma: Record<string, number[]>
+  } | null
   
   price: {
     current: number
@@ -72,6 +85,8 @@ export interface ScoreResult {
     changePercent: number
     pe: number
     pb: number
+    ps: number
+    peg: number
     marketCap: number
   }
   
@@ -83,20 +98,20 @@ export interface ScoreResult {
 export function calculateScores(data: StockData): ScoreResult {
   const { basic, price, kline } = data
   
-  // 1. 追踪评级 (技术面)
-  const trackScore = calculateTrackScore(price, kline)
+  // 1. 追踪评级 (技术面 + 行业热度 + 资金面)
+  const trackScore = calculateTrackScore(price, kline, basic.industry)
   
   // 2. 成长性评分
   const growthScore = calculateGrowthScore(price)
   
   // 3. 估值评分
-  const valuationScore = calculateValuationScore(price)
+  const valuationScore = calculateValuationScore(price, (kline?.data ?? []) as any)
   
   // 4. 风险评分
   const riskScore = calculateRiskScore(price)
   
   // 5. 市场温度
-  const marketTemp = calculateMarketTemp(price)
+  const marketTemp = calculateMarketTemp(price, kline)
   
   // 6. 均线评估
   const maEvaluation = calculateMAEval(kline, price)
@@ -110,69 +125,234 @@ export function calculateScores(data: StockData): ScoreResult {
   )
   
   // 8. Cedar 等级
-  const cedarLevel = getCedarLevel(cedarScore)
-  
-  // 9. 中美映射
-  const chinaUsMapping = getChinaUsMapping(basic.symbol, basic.industry)
-  
-  return {
-    symbol: basic.symbol,
-    name: basic.name,
-    cedarScore,
-    cedarLevel,
-    trackScore,
-    trackLevel: getTrackLevel(trackScore),
-    growthScore,
-    growthLevel: getGrowthLevel(growthScore),
-    valuationScore,
-    valuationLevel: getValuationLevel(valuationScore),
-    riskScore,
-    riskLevel: getRiskLevel(riskScore),
-    marketTemp,
-    marketTempLevel: getMarketTempLevel(marketTemp),
-    maEvaluation,
-    industry: basic.industry,
-    chinaUsMapping,
-    summary: '',
-    price: {
-      current: price.current,
-      change: price.change,
-      changePercent: price.changePercent,
-      pe: price.pe,
-      pb: price.pb,
-      marketCap: price.marketCap
-    },
-    updatedAt: new Date().toISOString()
-  }
+  const maEval = calculateMAEval(kline, price)
+
+    // 9. 中美映射
+    const chinaUsMapping = getChinaUsMapping(basic.symbol, basic.industry)
+
+    // 10. 赛道归属
+    const trackInfo = getIndustryTrackInfo(basic.industry)
+
+    return {
+      symbol: basic.symbol,
+      name: basic.name,
+      cedarScore,
+      cedarLevel: getCedarLevel(cedarScore),
+      trackScore,
+      trackLevel: getTrackLevel(trackScore),
+      growthScore,
+      growthLevel: getGrowthLevel(growthScore),
+      valuationScore,
+      valuationLevel: getValuationLevel(valuationScore),
+      riskScore,
+      riskLevel: getRiskLevel(riskScore),
+      marketTemp,
+      marketTempLevel: getMarketTempLevel(marketTemp),
+      maEvaluation: {
+        ma30: maEval.ma30,
+        ma60: maEval.ma60,
+        ma120: maEval.ma120,
+        ma240: maEval.ma240,
+        overall: maEval.overall,
+      },
+      maExplanation: maEval.explanation,
+      industry: basic.industry,
+      industryTrack: trackInfo.track,
+      industryTrackLabel: trackInfo.trackLabel,
+      chinaUsMapping,
+      summary: '',
+      price: {
+        current: price.current,
+        change: price.change,
+        changePercent: price.changePercent,
+        pe: price.pe,
+        pb: price.pb,
+        ps: (price as any).ps ?? 0,
+        peg: (price as any).peg ?? 0,
+        marketCap: price.marketCap
+      },
+      kline: kline as any,
+      updatedAt: new Date().toISOString()
+    }
 }
 
-function calculateTrackScore(price: StockData['price'], kline: StockData['kline']): number {
-  let score = 50 // 基础分
-  
-  // 趋势评分 (均线系统)
+// ===== 赛道等级：行业热度 + 资金面 映射 =====
+
+// 行业热度基准分 (综合各平台数据:东方财富/同花顺/雪球/Wind)
+const INDUSTRY_HEAT: Record<string, { heat: number; track: 'S' | 'A' | 'B' | 'C' }> = {
+  // 🔥 S级热门赛道
+  'AI': { heat: 95, track: 'S' }, '人工智能': { heat: 95, track: 'S' },
+  'Semiconductors': { heat: 92, track: 'S' },  // 英伟达/AMD等
+  'Technology': { heat: 88, track: 'S' },
+  '半导体': { heat: 88, track: 'S' }, '集成电路': { heat: 90, track: 'S' },
+  '芯片': { heat: 88, track: 'S' }, '算力': { heat: 88, track: 'S' },
+  '低空经济': { heat: 85, track: 'S' }, '新能源汽车': { heat: 85, track: 'S' },
+  'Auto Manufacturers': { heat: 85, track: 'S' },
+  'Electric Vehicles': { heat: 85, track: 'S' },
+  '智能汽车': { heat: 85, track: 'S' }, '机器人': { heat: 83, track: 'S' },
+  'Robotics': { heat: 83, track: 'S' },
+  '商业航天': { heat: 82, track: 'S' }, '光通信': { heat: 80, track: 'S' },
+
+  // ⭐ A级成长赛道
+  '电动车': { heat: 83, track: 'A' }, '云计算': { heat: 82, track: 'A' },
+  'Software - Application': { heat: 82, track: 'A' }, 'Software - Infrastructure': { heat: 82, track: 'A' },
+  'Innovation Technology': { heat: 80, track: 'A' },
+  '创新药': { heat: 80, track: 'A' }, '医疗器械': { heat: 76, track: 'A' },
+  'Biotechnology': { heat: 80, track: 'A' }, 'Pharmaceuticals': { heat: 76, track: 'A' },
+  '储能': { heat: 74, track: 'A' }, '消费电子': { heat: 72, track: 'A' },
+  'Consumer Electronics': { heat: 72, track: 'A' },
+  '新能源': { heat: 75, track: 'A' }, '氢能源': { heat: 70, track: 'A' },
+  'Clean Energy': { heat: 75, track: 'A' }, 'Solar': { heat: 68, track: 'B' },
+  '生物医药': { heat: 78, track: 'A' }, '量子科技': { heat: 78, track: 'A' },
+  '军工': { heat: 68, track: 'A' }, '国防军工': { heat: 68, track: 'A' },
+  'Aerospace & Defense': { heat: 68, track: 'A' },
+  '航空装备': { heat: 67, track: 'A' }, '软件服务': { heat: 68, track: 'A' },
+  '大数据': { heat: 80, track: 'A' }, '数据中心': { heat: 75, track: 'A' },
+  'Internet Software & Services': { heat: 80, track: 'A' }, 'Cloud': { heat: 80, track: 'A' },
+
+  // 📊 B级稳定赛道
+  '光伏': { heat: 68, track: 'B' }, '苹果产业链': { heat: 70, track: 'B' },
+  'Electronic Components': { heat: 66, track: 'B' }, '通信设备': { heat: 65, track: 'B' },
+  'Telecom Equipment': { heat: 65, track: 'B' },
+  '游戏': { heat: 64, track: 'B' }, '5G': { heat: 63, track: 'B' },
+  'Interactive Media & Services': { heat: 64, track: 'B' },
+  '风电': { heat: 65, track: 'B' }, '互联网服务': { heat: 67, track: 'B' },
+  'Healthcare': { heat: 58, track: 'B' },
+  '医疗服务': { heat: 58, track: 'B' }, '中药': { heat: 52, track: 'B' },
+  '化学制药': { heat: 50, track: 'B' }, '白酒': { heat: 55, track: 'B' },
+  'Liquor': { heat: 55, track: 'B' },
+  '化妆品': { heat: 55, track: 'B' }, '食品饮料': { heat: 55, track: 'B' },
+  '家电': { heat: 52, track: 'B' }, '乳品': { heat: 50, track: 'B' },
+  '证券': { heat: 50, track: 'B' }, '保险': { heat: 48, track: 'B' },
+
+  // 📉 C级冷门赛道
+  'Banks': { heat: 45, track: 'C' }, '银行': { heat: 45, track: 'C' },
+  'Financials': { heat: 48, track: 'C' },
+  '家居': { heat: 48, track: 'C' }, '建筑工程': { heat: 45, track: 'C' },
+  '建材': { heat: 40, track: 'C' }, '电力': { heat: 40, track: 'C' },
+  'Utilities': { heat: 40, track: 'C' },
+  '化工': { heat: 40, track: 'C' }, 'Chemicals': { heat: 40, track: 'C' },
+  '航空': { heat: 35, track: 'C' }, '机场': { heat: 38, track: 'C' },
+  'Airlines': { heat: 35, track: 'C' }, 'Air Transport': { heat: 35, track: 'C' },
+  '房地产': { heat: 30, track: 'C' }, '钢铁': { heat: 30, track: 'C' },
+  'Real Estate': { heat: 30, track: 'C' }, 'Steel': { heat: 30, track: 'C' },
+  '煤炭': { heat: 28, track: 'C' }, '石油': { heat: 35, track: 'C' },
+  'Oil & Gas': { heat: 35, track: 'C' }, 'Coal': { heat: 28, track: 'C' },
+  '造纸': { heat: 30, track: 'C' }, '纺织服装': { heat: 28, track: 'B' },
+  '公路铁路': { heat: 32, track: 'C' }, '火电': { heat: 35, track: 'C' },
+  'Retail': { heat: 50, track: 'B' }, 'REITs': { heat: 45, track: 'C' },
+}
+
+export function getIndustryTrackInfo(industry: string): {
+  track: 'S' | 'A' | 'B' | 'C'
+  heat: number
+  heatLabel: string
+  trackLabel: string
+  emoji: string
+  color: string
+} {
+  const info = INDUSTRY_HEAT[industry]
+  const track = info?.track ?? 'C'
+  const heat = info?.heat ?? 40
+  const trackLabel = track === 'S' ? 'S级热门' : track === 'A' ? 'A级成长' : track === 'B' ? 'B级稳定' : 'C级冷门'
+  const heatLabel = heat >= 80 ? '🔥 超热' : heat >= 65 ? '⭐ 热门' : heat >= 45 ? '📊 平稳' : '📉 冷门'
+  const emoji = heat >= 80 ? '🔥' : heat >= 65 ? '⭐' : heat >= 45 ? '📊' : '📉'
+  const color = track === 'S' ? '#ff6b35' : track === 'A' ? '#ffaa00' : track === 'B' ? '#00d68f' : '#6b7aff'
+  return { track, heat, heatLabel, trackLabel, emoji, color }
+}
+
+// 资金面加成: 成交额异常放大 = 主力关注
+function getCapitalBonus(volume: number, avgVolume: number): number {
+  if (avgVolume <= 0) return 0
+  const ratio = volume / avgVolume
+  if (ratio > 5) return 20   // 5倍以上成交 → 主力爆买
+  if (ratio > 3) return 15   // 3倍以上 → 大幅加仓
+  if (ratio > 2) return 10   // 2倍以上 → 明显流入
+  if (ratio > 1.5) return 5  // 1.5倍以上 → 温和流入
+  if (ratio < 0.5) return -10 // 缩量一半 → 资金撤离
+  return 0
+}
+
+// 市值规模加成 (大市值龙头 = 赛道确定性高)
+function getScaleBonus(marketCap: number): number {
+  if (marketCap > 1000000000000) return 10  // 万亿以上
+  if (marketCap > 100000000000) return 5    // 千亿以上
+  if (marketCap < 10000000000) return -5   // 百亿以下
+  return 0
+}
+
+// 计算赛道综合评分: 技术面50% + 行业热度40% + 资金面10%
+export function calculateTrackScore(
+  price: StockData['price'],
+  kline: StockData['kline'],
+  industry: string
+): number {
+  let techScore = 50 // 技术面基准分
+
+  // ── 技术评分 (均线系统) ──
   if (kline) {
     const closes = kline.data.map(d => d.close)
     const ma30 = kline.ma.ma30
     const ma60 = kline.ma.ma60
     const current = closes[closes.length - 1]
-    
-    if (current > ma30[ma30.length - 1]) score += 10
-    if (current > ma60[ma60.length - 1]) score += 10
-    if (ma30[ma30.length - 1] > ma60[ma60.length - 1]) score += 10
+
+    if (current > ma30[ma30.length - 1]) techScore += 10
+    if (current > ma60[ma60.length - 1]) techScore += 10
+    if (ma30[ma30.length - 1] > ma60[ma60.length - 1]) techScore += 10
   }
-  
-  // 动量评分 (涨跌幅)
-  if (price.changePercent > 5) score += 15
-  else if (price.changePercent > 2) score += 10
-  else if (price.changePercent > 0) score += 5
-  else if (price.changePercent < -5) score -= 15
-  else if (price.changePercent < -2) score -= 10
-  else if (price.changePercent < 0) score -= 5
-  
-  // 成交量评分
-  if (price.volume > 100000000) score += 5
-  
-  return Math.min(100, Math.max(0, score))
+
+  // ── 动量评分 (近期涨幅) ──
+  if (price.changePercent > 8) techScore += 15
+  else if (price.changePercent > 5) techScore += 10
+  else if (price.changePercent > 2) techScore += 5
+  else if (price.changePercent > 0) techScore += 2
+  else if (price.changePercent < -8) techScore -= 15
+  else if (price.changePercent < -5) techScore -= 10
+  else if (price.changePercent < -2) techScore -= 5
+
+  techScore = Math.min(100, Math.max(0, techScore))
+
+  // ── 行业热度 ──
+  const industryHeat = INDUSTRY_HEAT[industry]?.heat ?? 50
+
+  // ── 资金面加成 ──
+  const avgVolume = price.history.length >= 20
+    ? price.history.slice(-20).reduce((sum, d) => sum + d.volume, 0) / 20
+    : price.volume
+  const capitalBonus = getCapitalBonus(price.volume, avgVolume)
+
+  // ── 规模加成 ──
+  const scaleBonus = getScaleBonus(price.marketCap)
+
+  // ── 综合赛道分: 技术50% + 行业40% + 资金面/规模 10% ──
+  const trackScore = Math.round(
+    techScore * 0.50 +
+    industryHeat * 0.40 +
+    (50 + capitalBonus + scaleBonus) * 0.10
+  )
+
+  return Math.min(100, Math.max(0, trackScore))
+}
+
+export function getTrackLevel(score: number): 'S' | 'A' | 'B' | 'C' {
+  // 综合赛道评分等级
+  if (score >= 85) return 'S'
+  if (score >= 70) return 'A'
+  if (score >= 50) return 'B'
+  return 'C'
+}
+
+export function getTrackLevelDetail(score: number, industry: string): {
+  level: 'S' | 'A' | 'B' | 'C'
+  industryHeat: number
+  heatLabel: string
+} {
+  const info = getIndustryTrackInfo(industry)
+  return {
+    level: getTrackLevel(score),
+    industryHeat: info.heat,
+    heatLabel: info.heatLabel
+  }
 }
 
 function calculateGrowthScore(price: StockData['price']): number {
@@ -203,28 +383,69 @@ function calculateGrowthScore(price: StockData['price']): number {
   return Math.min(100, Math.max(0, score))
 }
 
-function calculateValuationScore(price: StockData['price']): number {
-  let score = 50
-  
-  // PE 评分
-  if (price.pe > 0) {
-    if (price.pe < 10) score += 25
-    else if (price.pe < 15) score += 20
-    else if (price.pe < 20) score += 15
-    else if (price.pe < 30) score += 5
-    else if (price.pe < 50) score -= 10
-    else if (price.pe < 100) score -= 20
-    else score -= 30
+function calculateValuationScore(price: StockData['price'], history: StockData['price']['history']): number {
+  let score = 0
+
+  // ── 维度一：股价历史分位（权重最大）──────────────────
+  // 股价越接近历史低点，分位越低 → 估值机会越大 → 分数越高
+  let pricePercentile = 50 // 默认50%分位
+  if (history.length >= 60) {
+    const closes = history.map(d => d.close).sort((a, b) => a - b)
+    const current = price.current
+    // 计算当前价格在历史价位中的分位（0%=最低点，100%=最高点）
+    const below = closes.filter(c => c <= current).length
+    pricePercentile = (below / closes.length) * 100
+    // 低价区（<30%分位）高分，高价区（>70%分位）低分
+    if (pricePercentile <= 15) score += 40  // 接近历史最低价，极佳买点
+    else if (pricePercentile <= 30) score += 30
+    else if (pricePercentile <= 45) score += 20
+    else if (pricePercentile <= 60) score += 5
+    else if (pricePercentile <= 75) score -= 10
+    else score -= 25                      // 接近历史最高价，高位风险大
+  } else {
+    score += 15 // 数据不足，给中间偏正
   }
-  
-  // PB 评分
+
+  // ── 维度二：PE（成长预期折现）────────────────────────
+  if (price.pe > 0 && price.pe < 500) {
+    if (price.pe <= 10) score += 20        // 极低估
+    else if (price.pe <= 20) score += 12   // 合理偏低
+    else if (price.pe <= 30) score += 5    // 合理区间
+    else if (price.pe <= 50) score -= 5    // 略偏高
+    else if (price.pe <= 100) score -= 15  // 高估
+    else score -= 25                        // 极度高估
+  } else if (price.pe <= 0) {
+    score += 5 // 亏损股，PE无效但也不扣分太狠
+  }
+
+  // ── 维度三：PB（资产价值底线）────────────────────────
   if (price.pb > 0) {
-    if (price.pb < 1) score += 15
-    else if (price.pb < 2) score += 10
-    else if (price.pb < 3) score += 5
-    else if (price.pb > 5) score -= 10
+    if (price.pb < 1) score += 12         // 破净，极具资产价值
+    else if (price.pb < 2) score += 8
+    else if (price.pb < 3) score += 3
+    else if (price.pb < 5) score -= 3
+    else score -= 10
   }
-  
+
+  // ── 维度四：PS（营收倍数，低估值成长股参考）────────────
+  if ((price as any).ps ?? 0 > 0) {
+    if ((price as any).ps ?? 0 < 2) score += 8          // 营收倍数极低
+    else if ((price as any).ps ?? 0 < 5) score += 4
+    else if ((price as any).ps ?? 0 < 10) score -= 2
+    else score -= 8
+  }
+
+  // ── 维度五：PEG（成长匹配度）──────────────────────────
+  if ((price as any).peg ?? 0 > 0) {
+    if ((price as any).peg ?? 0 <= 0.5) score += 8     // 成长被严重低估
+    else if ((price as any).peg ?? 0 <= 1) score += 4
+    else if ((price as any).peg ?? 0 <= 1.5) score += 0
+    else if ((price as any).peg ?? 0 <= 2.5) score -= 5
+    else score -= 10
+  } else if ((price as any).peg ?? 0 < 0) {
+    score -= 5 // 负 PEG，盈利下滑
+  }
+
   return Math.min(100, Math.max(0, score))
 }
 
@@ -253,17 +474,27 @@ function calculateRiskScore(price: StockData['price']): number {
   return Math.min(100, Math.max(0, score))
 }
 
-function calculateMarketTemp(price: StockData['price']): number {
-  // 简化的市场温度计
-  // 基于价格相对52周高点的位置
-  if (price.high > 0) {
+function calculateMarketTemp(price: StockData['price'], kline: StockData['kline']): number {
+  // 基于K线历史数据计算价格位置
+  if (kline && kline.data.length >= 20) {
+    const closes = kline.data.map(d => d.close)
+    const current = closes[closes.length - 1]
+    const high = Math.max(...closes)
+    const low = Math.min(...closes)
+    if (high > low) {
+      const position = (current - low) / (high - low)
+      return Math.round(position * 100)
+    }
+  }
+  // 回退：用当日高低
+  if (price.high > price.low) {
     const position = (price.current - price.low) / (price.high - price.low)
     return Math.round(position * 100)
   }
   return 50
 }
 
-function calculateMAEval(kline: StockData['kline'], price: StockData['price']): ScoreResult['maEvaluation'] {
+function calculateMAEval(kline: StockData['kline'], price: StockData['price']): ScoreResult['maEvaluation'] & { explanation: ScoreResult['maExplanation'] } {
   const result: ScoreResult['maEvaluation'] = {
     ma30: 'neutral',
     ma60: 'neutral',
@@ -271,32 +502,97 @@ function calculateMAEval(kline: StockData['kline'], price: StockData['price']): 
     ma240: 'neutral',
     overall: 'neutral'
   }
-  
-  if (!kline || kline.data.length < 10) return result
-  
+
+  if (!kline || kline.data.length < 10) {
+    return {
+      ...result,
+      explanation: { trend: '数据不足', signal: '暂无信号', advice: '等待更多数据' }
+    }
+  }
+
+  const closes = kline.data.map(d => d.close)
   const current = price.current
   const ma30 = kline.ma.ma30[kline.ma.ma30.length - 1]
   const ma60 = kline.ma.ma60[kline.ma.ma60.length - 1]
   const ma120 = kline.ma.ma120[kline.ma.ma120.length - 1]
   const ma240 = kline.ma.ma240[kline.ma.ma240.length - 1]
-  
+
+  // 各均线方向（最近5个值的变化趋势）
+  const maSlope = (arr: number[], n = 5) => {
+    if (arr.length < n) return 0
+    const slice = arr.slice(-n)
+    return (slice[slice.length - 1] - slice[0]) / slice[0]
+  }
+
+  const ma30Slope = maSlope(kline.ma.ma30)
+  const ma60Slope = maSlope(kline.ma.ma60)
+  const ma120Slope = maSlope(kline.ma.ma120)
+  const ma240Slope = maSlope(kline.ma.ma240)
+
+  // 价格vs均线
   if (current > ma30) result.ma30 = 'bull'
   else if (current < ma30) result.ma30 = 'bear'
-  
+
   if (current > ma60) result.ma60 = 'bull'
   else if (current < ma60) result.ma60 = 'bear'
-  
+
   if (current > ma120) result.ma120 = 'bull'
   else if (current < ma120) result.ma120 = 'bear'
-  
+
   if (current > ma240) result.ma240 = 'bull'
   else if (current < ma240) result.ma240 = 'bear'
-  
+
   const bullish = [result.ma30, result.ma60, result.ma120, result.ma240].filter(m => m === 'bull').length
-  if (bullish >= 3) result.overall = 'bull'
+  const risingMAs = [ma30Slope, ma60Slope, ma120Slope, ma240Slope].filter(s => s > 0.005).length
+  const fallingMAs = [ma30Slope, ma60Slope, ma120Slope, ma240Slope].filter(s => s < -0.005).length
+
+  if (bullish >= 3 && risingMAs >= 3) result.overall = 'bull'
+  else if (bullish <= 1 && fallingMAs >= 3) result.overall = 'bear'
+  else if (bullish >= 3) result.overall = 'bull'
   else if (bullish <= 1) result.overall = 'bear'
-  
-  return result
+
+  // ── 生成指导性解释 ──
+  const aboveAll = result.ma30 === 'bull' && result.ma60 === 'bull' && result.ma120 === 'bull' && result.ma240 === 'bull'
+  const belowAll = result.ma30 === 'bear' && result.ma60 === 'bear' && result.ma120 === 'bear' && result.ma240 === 'bear'
+
+  let trend: string
+  let signal: string
+  let advice: string
+
+  if (aboveAll && result.overall === 'bull') {
+    trend = '多头排列，均线系统全面看涨'
+    signal = '所有均线呈上升趋势，价在所有均线之上'
+    advice = '持有为主，回调至MA30附近可加仓，跌破MA60需警惕'
+  } else if (belowAll && result.overall === 'bear') {
+    trend = '空头排列，均线系统全面看跌'
+    signal = '所有均线呈下降趋势，价在所有均线之下'
+    advice = '观望为主，突破MA30前不轻易入场'
+  } else if (result.ma30 === 'bull' && result.ma60 === 'bull' && result.ma120 === 'bear') {
+    trend = '短期反弹，中期压力'
+    signal = '短线均线多头，但MA120仍构成压制'
+    advice = '轻仓参与反弹，MA120处注意获利了结'
+  } else if (result.ma30 === 'bear' && result.ma60 === 'bear' && result.ma120 === 'bull') {
+    trend = '中期震荡，底部抬升'
+    signal = '短期回调，但中长期均线仍向上'
+    advice = '逢低布局，MA30收复后可加仓'
+  } else if (result.overall === 'bull') {
+    trend = '震荡偏多'
+    signal = '多数均线多头，部分均线方向分歧'
+    advice = '区间震荡操作，高抛低吸，突破后跟进'
+  } else if (result.overall === 'bear') {
+    trend = '震荡偏空'
+    signal = '多数均线空头，短期或有反弹'
+    advice = '谨慎观望，等待底部信号明确'
+  } else {
+    trend = '方向不明'
+    signal = '多空均线交错，无明确趋势'
+    advice = '观望为主，避免追涨杀跌'
+  }
+
+  return {
+    ...result,
+    explanation: { trend, signal, advice }
+  }
 }
 
 function getCedarLevel(score: number): ScoreResult['cedarLevel'] {
@@ -306,13 +602,6 @@ function getCedarLevel(score: number): ScoreResult['cedarLevel'] {
   if (score >= 50) return 'C'
   if (score >= 30) return 'D'
   return 'AVOID'
-}
-
-function getTrackLevel(score: number): 'S' | 'A' | 'B' | 'C' {
-  if (score >= 85) return 'S'
-  if (score >= 70) return 'A'
-  if (score >= 50) return 'B'
-  return 'C'
 }
 
 function getGrowthLevel(score: number): 'A' | 'B' | 'C' | 'D' {

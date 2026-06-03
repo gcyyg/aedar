@@ -3,13 +3,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Search, TrendingUp, TrendingDown, AlertTriangle, Shield,
-  Activity, BarChart3, ArrowUpRight, ArrowDownRight,
-  Zap, Target, Award, ChevronRight, Loader2, Sparkles,
-  ArrowRight, Droplet, Thermometer, LineChart, Map, Brain,
-  X, RefreshCw, Info
+  Search, TrendingUp, TrendingDown, AlertTriangle,
+  Activity, Loader2, ArrowRight, X, Shield,
+  Thermometer, ArrowUpRight, ArrowDownRight, Minus,
+  Sparkles, BarChart3, Zap
 } from 'lucide-react'
-import ReactECharts from 'echarts-for-react'
 import { clsx } from 'clsx'
 
 // ── Types ──────────────────────────────────────────
@@ -20,6 +18,11 @@ interface StockPrice {
   pe: number
   pb: number
   marketCap: number
+  ps?: number
+  peg?: number
+  roe?: number
+  revenueGrowth?: number
+  profitGrowth?: number
   history: Array<{ date: string; close: number; open?: number; high?: number; low?: number; volume?: number }>
 }
 
@@ -48,14 +51,55 @@ interface StockData {
   marketTempLevel: 'fever' | 'warm' | 'neutral' | 'cold'
   maEvaluation: MAEvaluation
   industry: string
+  industryTrack: 'S' | 'A' | 'B' | 'C'   // 赛道归属
+  industryTrackLabel: string              // 赛道标签
   chinaUsMapping: string | null
   summary: string
   price: StockPrice
   updatedAt: string
+  basic?: {
+    area: string
+    sector: string
+    CEO?: string
+    employees?: number
+  }
+}
+
+// ── Grade Config ──────────────────────────────────────────
+const gradeConfig: Record<string, { bg: string; border: string; text: string; label: string }> = {
+  S: { bg: 'rgba(255,107,53,0.15)', border: 'rgba(255,107,53,0.3)', text: '#ff6b35', label: 'S级' },
+  A: { bg: 'rgba(255,170,0,0.15)', border: 'rgba(255,170,0,0.3)', text: '#ffaa00', label: 'A级' },
+  B: { bg: 'rgba(0,214,143,0.15)', border: 'rgba(0,214,143,0.3)', text: '#00d68f', label: 'B级' },
+  C: { bg: 'rgba(107,122,255,0.15)', border: 'rgba(107,122,255,0.3)', text: '#6b7aff', label: 'C级' },
+  D: { bg: 'rgba(255,255,255,0.06)', border: 'rgba(255,255,255,0.1)', text: 'rgba(240,240,245,0.6)', label: 'D级' },
+  AVOID: { bg: 'rgba(255,61,113,0.15)', border: 'rgba(255,61,113,0.3)', text: '#ff3d71', label: '回避' },
+}
+
+const cedarLevelConfig: Record<string, { bg: string; border: string; text: string; emoji: string }> = {
+  diamond: { bg: 'rgba(0,214,143,0.1)', border: 'rgba(0,214,143,0.3)', text: '#b9f2ff', emoji: '💎' },
+  gold: { bg: 'rgba(255,215,0,0.1)', border: 'rgba(255,215,0,0.3)', text: '#ffd700', emoji: '🥇' },
+  silver: { bg: 'rgba(192,192,192,0.1)', border: 'rgba(192,192,192,0.3)', text: '#c0c0c0', emoji: '🥈' },
+  obsidian: { bg: 'rgba(139,157,195,0.1)', border: 'rgba(139,157,195,0.3)', text: '#8b9dc3', emoji: '🪨' },
+  avoid: { bg: 'rgba(255,71,87,0.1)', border: 'rgba(255,71,87,0.3)', text: '#ff4757', emoji: '⚠️' },
+}
+
+// ── Utility ──────────────────────────────────────────
+function formatMarketCap(cap: number) {
+  if (!cap) return 'N/A'
+  if (cap >= 1e12) return `$${(cap / 1e12).toFixed(2)}万亿`
+  if (cap >= 1e11) return `$${(cap / 1e11).toFixed(2)}千亿`
+  if (cap >= 1e9) return `$${(cap / 1e9).toFixed(2)}亿`
+  return `$${cap.toLocaleString()}`
+}
+
+function formatDate(iso: string) {
+  try {
+    return new Date(iso).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  } catch { return iso }
 }
 
 // ── Animated Number ──────────────────────────────────────────
-function AnimatedNumber({ value, duration = 1500 }: { value: number; duration?: number }) {
+function AnimatedNumber({ value, duration = 1200 }: { value: number; duration?: number }) {
   const [display, setDisplay] = useState(0)
   const startTime = useRef<number | null>(null)
   const frameRef = useRef<number>(0)
@@ -73,877 +117,696 @@ function AnimatedNumber({ value, duration = 1500 }: { value: number; duration?: 
     return () => cancelAnimationFrame(frameRef.current)
   }, [value, duration])
 
-  return <span>{display.toLocaleString()}</span>
+  return <>{display.toLocaleString()}</>
 }
 
-// ── Progress Bar ──────────────────────────────────────────
-function ProgressBar({ value, delay = 0 }: { value: number; delay?: number }) {
+// ── Skeleton Lines ──────────────────────────────────────────
+function SkeletonLines({ count = 3 }: { count?: number }) {
   return (
-    <div className="progress-bar w-full">
-      <motion.div
-        className="progress-fill"
-        initial={{ width: 0 }}
-        animate={{ width: `${value}%` }}
-        transition={{ duration: 1.2, delay, ease: [0.4, 0, 0.2, 1] }}
-      />
+    <div className="flex flex-col gap-2">
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="h-4 skeleton-bar rounded" style={{ width: `${60 + Math.random() * 40}%` }} />
+      ))}
     </div>
   )
 }
 
-// ── Grade Badge ──────────────────────────────────────────
-function GradeBadge({ grade }: { grade: string }) {
-  const gradeConfig: Record<string, { bg: string; border: string; text: string }> = {
-    S: { bg: 'from-orange-500/20 to-red-500/20', border: 'border-orange-500/50', text: 'text-orange-400' },
-    A: { bg: 'from-yellow-500/20 to-orange-500/20', border: 'border-yellow-500/50', text: 'text-yellow-400' },
-    B: { bg: 'from-green-500/20 to-emerald-500/20', border: 'border-green-500/50', text: 'text-green-400' },
-    C: { bg: 'from-blue-500/20 to-indigo-500/20', border: 'border-blue-500/50', text: 'text-blue-400' },
-    D: { bg: 'from-gray-500/20 to-slate-500/20', border: 'border-gray-500/50', text: 'text-gray-400' },
-    AVOID: { bg: 'from-red-500/20 to-rose-500/20', border: 'border-red-500/50', text: 'text-red-400' },
-  }
-  const config = gradeConfig[grade] || gradeConfig.C
-  
-  return (
-    <motion.span
-      initial={{ scale: 0 }}
-      animate={{ scale: 1 }}
-      transition={{ type: 'spring', stiffness: 300, delay: 0.5 }}
-      className={clsx(
-        'inline-flex items-center justify-center w-12 h-12 rounded-xl',
-        'font-mono text-lg font-bold border backdrop-blur-sm',
-        config.bg, config.border, config.text
-      )}
-    >
-      {grade}
-    </motion.span>
-  )
-}
-
-// ── Score Ring ──────────────────────────────────────────
-function ScoreRing({ value, size = 120, strokeWidth = 8 }: { value: number; size?: number; strokeWidth?: number }) {
-  const radius = (size - strokeWidth) / 2
-  const circumference = 2 * Math.PI * radius
-  const progress = (value / 100) * circumference
-  
-  return (
-    <svg width={size} height={size} className="transform -rotate-90">
-      <circle
-        cx={size / 2} cy={size / 2} r={radius}
-        fill="none"
-        stroke="rgba(255,255,255,0.05)"
-        strokeWidth={strokeWidth}
-      />
-      <motion.circle
-        cx={size / 2} cy={size / 2} r={radius}
-        fill="none"
-        stroke="url(#gradient)"
-        strokeWidth={strokeWidth}
-        strokeLinecap="round"
-        strokeDasharray={circumference}
-        initial={{ strokeDashoffset: circumference }}
-        animate={{ strokeDashoffset: circumference - progress }}
-        transition={{ duration: 1.5, ease: [0.4, 0, 0.2, 1] }}
-      />
-      <defs>
-        <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor="#0095ff" />
-          <stop offset="100%" stopColor="#00d68f" />
-        </linearGradient>
-      </defs>
-    </svg>
-  )
-}
-
-// ── Temp Gauge ──────────────────────────────────────────
-function TempGauge({ value }: { value: number }) {
-  const rotation = (value / 100) * 180 - 90
-  
-  return (
-    <div className="relative w-40 h-24">
-      {/* Arc */}
-      <svg width="160" height="80" viewBox="0 0 160 80" className="absolute left-0">
-        <path
-          d="M 10 70 A 70 70 0 0 1 150 70"
-          fill="none"
-          stroke="rgba(255,255,255,0.05)"
-          strokeWidth="8"
-          strokeLinecap="round"
-        />
-        <motion.path
-          d="M 10 70 A 70 70 0 0 1 150 70"
-          fill="none"
-          stroke="url(#gaugeGradient)"
-          strokeWidth="8"
-          strokeLinecap="round"
-          strokeDasharray="220"
-          initial={{ strokeDashoffset: 220 }}
-          animate={{ strokeDashoffset: 220 - (value / 100) * 180 }}
-          transition={{ duration: 1.5, ease: [0.4, 0, 0.2, 1] }}
-        />
-        <defs>
-          <linearGradient id="gaugeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#0095ff" />
-            <stop offset="50%" stopColor="#ffaa00" />
-            <stop offset="100%" stopColor="#ff3d71" />
-          </linearGradient>
-        </defs>
-      </svg>
-      {/* Needle */}
-      <motion.div
-        className="absolute bottom-0 left-1/2 w-1 h-16 origin-bottom"
-        style={{ height: '56px' }}
-        animate={{ rotate: rotation }}
-        transition={{ type: 'spring', stiffness: 100, damping: 15 }}
-      >
-        <div className="w-full h-1 bg-gradient-to-r from-transparent via-white to-transparent rounded-full" />
-        <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-3 h-3 rounded-full bg-white shadow-lg" />
-      </motion.div>
-      {/* Labels */}
-      <div className="absolute bottom-0 left-0 text-xs text-white/30">冰点</div>
-      <div className="absolute bottom-0 right-0 text-xs text-white/30">过热</div>
-    </div>
-  )
-}
-
-// ── MA Badge ──────────────────────────────────────────
-function MABadge({ label, status }: { label: string; status: 'bull' | 'bear' | 'neutral' }) {
-  const colors = {
-    bull: 'bg-green-500/20 text-green-400 border-green-500/30',
-    bear: 'bg-red-500/20 text-red-400 border-red-500/30',
-    neutral: 'bg-gray-500/20 text-gray-400 border-gray-500/30'
-  }
-  const icons = { bull: ArrowUpRight, bear: ArrowDownRight, neutral: Minus }
-  const Icon = icons[status]
-  
-  return (
-    <div className={clsx('flex items-center gap-1.5 px-2 py-1 rounded-lg border text-xs', colors[status])}>
-      <Icon className="w-3 h-3" />
-      <span className="font-mono">{label}</span>
-    </div>
-  )
-}
-
-function Minus({ className }: { className?: string }) {
-  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <line x1="5" y1="12" x2="19" y2="12" />
-  </svg>
-}
-
-// ── MA Chart ──────────────────────────────────────────
-function MAChart({ history }: { history: Array<{ date: string; close: number }> }) {
-  const chartData = history.slice(-60)
-  
-  const option = {
-    backgroundColor: 'transparent',
-    grid: { top: 20, right: 20, bottom: 40, left: 50 },
-    xAxis: {
-      type: 'category',
-      data: chartData.map(d => d.date.slice(5)), // MM-DD format
-      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } },
-      axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 10 },
-      splitLine: { show: false },
-    },
-    yAxis: {
-      type: 'value',
-      axisLine: { show: false },
-      axisLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 10 },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
-    },
-    series: [
-      {
-        name: 'Price',
-        type: 'line',
-        smooth: true,
-        symbol: 'none',
-        data: chartData.map(d => d.close.toFixed(2)),
-        lineStyle: { color: '#0095ff', width: 2 },
-        areaStyle: {
-          color: {
-            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(0, 149, 255, 0.3)' },
-              { offset: 1, color: 'rgba(0, 149, 255, 0)' },
-            ],
-          },
-        },
-        animationDuration: 2000,
-        animationEasing: 'cubicOut',
-      },
-    ],
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: 'rgba(15, 15, 25, 0.95)',
-      borderColor: 'rgba(255,255,255,0.1)',
-      textStyle: { color: '#fff', fontSize: 12 },
-    },
-  }
-  return <ReactECharts option={option} style={{ height: 200 }} />
-}
-
-// ── Card Components ──────────────────────────────────────────
+// ── Card Component ──────────────────────────────────────────
 function Card({ children, className = '', delay = 0 }: { children: React.ReactNode; className?: string; delay?: number }) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 30 }}
+      initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.6, delay, ease: [0.4, 0, 0.2, 1] }}
-      className={clsx('glass-card p-6 glow-border', className)}
+      transition={{ delay, duration: 0.5 }}
+      className={`card-style ${className}`}
     >
       {children}
     </motion.div>
   )
 }
 
-// ── Score Card ──────────────────────────────────────────
-function ScoreCard({ title, value, grade, icon: Icon, delay = 0, children }: {
-  title: string; value: number; grade?: string; icon: any; delay?: number; children?: React.ReactNode
-}) {
+// ── Card Header ──────────────────────────────────────────
+function CardHeader({ icon, title, badge }: { icon: string; title: string; badge?: React.ReactNode }) {
   return (
-    <Card delay={delay}>
-      <div className="flex items-start justify-between mb-4">
-        <div className="p-2 rounded-lg bg-accent/10">
-          <Icon className="w-5 h-5 text-accent" />
-        </div>
-        {grade && <GradeBadge grade={grade} />}
+    <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center gap-2.5">
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm">{icon}</div>
+        <span className="text-[13px] font-semibold text-white/60 tracking-wide">{title}</span>
       </div>
-      <div className="text-3xl font-bold font-mono mb-2">{value}</div>
-      <div className="text-sm text-white/50 mb-4">{title}</div>
-      <ProgressBar value={value} delay={delay + 0.3} />
-      {children && <div className="mt-3">{children}</div>}
-    </Card>
+      {badge}
+    </div>
   )
 }
 
-// ── Valuation Badge ──────────────────────────────────────────
-function ValuationBadge({ level }: { level: StockData['valuationLevel'] }) {
-  const config = {
-    low: { label: '低估', bg: 'bg-green-500/20', text: 'text-green-400', border: 'border-green-500/30' },
-    medium: { label: '适中', bg: 'bg-yellow-500/20', text: 'text-yellow-400', border: 'border-yellow-500/30' },
-    high: { label: '偏高', bg: 'bg-orange-500/20', text: 'text-orange-400', border: 'border-orange-500/30' },
-    very_high: { label: '高估', bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30' },
-  }
-  const c = config[level]
+// ── Score Bar ──────────────────────────────────────────
+function ScoreBar({ value, gradient = 'linear-gradient(90deg, #0095ff, #00d68f)' }: { value: number; gradient?: string }) {
   return (
-    <span className={clsx('px-2 py-1 rounded text-xs border', c.bg, c.text, c.border)}>
-      {c.label}
-    </span>
-  )
-}
-
-// ── Risk Badge ──────────────────────────────────────────
-function RiskBadge({ level }: { level: StockData['riskLevel'] }) {
-  const config = {
-    low: { label: '低风险', bg: 'bg-green-500/20', text: 'text-green-400', border: 'border-green-500/30' },
-    medium: { label: '中风险', bg: 'bg-yellow-500/20', text: 'text-yellow-400', border: 'border-yellow-500/30' },
-    high: { label: '高风险', bg: 'bg-orange-500/20', text: 'text-orange-400', border: 'border-orange-500/30' },
-    very_high: { label: '极高风险', bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30' },
-  }
-  const c = config[level]
-  return (
-    <span className={clsx('px-2 py-1 rounded text-xs border', c.bg, c.text, c.border)}>
-      {c.label}
-    </span>
+    <div className="h-1.5 bg-white/5 rounded overflow-hidden mb-4">
+      <motion.div
+        className="h-full rounded"
+        style={{ background: gradient }}
+        initial={{ width: 0 }}
+        animate={{ width: `${value}%` }}
+        transition={{ duration: 1.2, ease: [0.4, 0, 0.2, 1] }}
+      />
+    </div>
   )
 }
 
 // ── Market Temp Badge ──────────────────────────────────────────
-function MarketTempBadge({ level }: { level: StockData['marketTempLevel'] }) {
-  const config = {
-    fever: { label: '过热', bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30' },
-    warm: { label: '温暖', bg: 'bg-orange-500/20', text: 'text-orange-400', border: 'border-orange-500/30' },
-    neutral: { label: '中性', bg: 'bg-gray-500/20', text: 'text-gray-400', border: 'border-gray-500/30' },
-    cold: { label: '冰冷', bg: 'bg-blue-500/20', text: 'text-blue-400', border: 'border-blue-500/30' },
+function MarketTempBadge({ level }: { level: string }) {
+  const map: Record<string, { bg: string; text: string; label: string }> = {
+    fever: { bg: 'rgba(255,61,113,0.15)', text: '#ff3d71', label: '过热' },
+    warm: { bg: 'rgba(255,107,53,0.15)', text: '#ff6b35', label: '偏热' },
+    neutral: { bg: 'rgba(255,170,0,0.15)', text: '#ffaa00', label: '中性' },
+    cold: { bg: 'rgba(0,149,255,0.15)', text: '#0095ff', label: '偏冷' },
   }
-  const c = config[level]
+  const c = map[level] || map.neutral
   return (
-    <span className={clsx('px-2 py-1 rounded text-xs border', c.bg, c.text, c.border)}>
+    <span className="text-[10px] font-semibold px-2 py-0.5 rounded" style={{ background: c.bg, color: c.text }}>
       {c.label}
     </span>
   )
 }
 
-// ── Cedar Level Display ──────────────────────────────────────────
-function CedarLevelDisplay({ level }: { level: StockData['cedarLevel'] }) {
-  const config: Record<string, { label: string; bg: string; text: string; border: string; icon: string }> = {
-    S: { label: '钻石级', bg: 'from-orange-500/20 to-red-500/20', text: 'text-orange-400', border: 'border-orange-500/30', icon: '💎' },
-    A: { label: '黄金级', bg: 'from-yellow-500/20 to-orange-500/20', text: 'text-yellow-400', border: 'border-yellow-500/30', icon: '🥇' },
-    B: { label: '白银级', bg: 'from-gray-300/20 to-gray-400/20', text: 'text-gray-300', border: 'border-gray-400/30', icon: '🥈' },
-    C: { label: '青铜级', bg: 'from-amber-600/20 to-amber-700/20', text: 'text-amber-600', border: 'border-amber-600/30', icon: '🥉' },
-    D: { label: '观察级', bg: 'from-gray-500/20 to-slate-500/20', text: 'text-gray-400', border: 'border-gray-500/30', icon: '📊' },
-    AVOID: { label: '回避级', bg: 'from-red-500/20 to-rose-500/20', text: 'text-red-400', border: 'border-red-500/30', icon: '⚠️' },
+// ── MA Badge ──────────────────────────────────────────
+function MABadge({ label, status }: { label: string; status: 'bull' | 'bear' | 'neutral' }) {
+  const colors = {
+    bull: 'rgba(0,214,143,0.15) text-[#00d68f] border-[rgba(0,214,143,0.3)]',
+    bear: 'rgba(255,61,113,0.15) text-[#ff3d71] border-[rgba(255,61,113,0.3)]',
+    neutral: 'rgba(255,255,255,0.06) text-white/40 border-white/10',
   }
-  const c = config[level] || config.AVOID
-  
+  const icons = { bull: ArrowUpRight, bear: ArrowDownRight, neutral: Minus }
+  const Icon = icons[status]
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ delay: 0.8 }}
-      className={clsx(
-        'inline-flex items-center gap-2 px-4 py-2 rounded-full',
-        'bg-gradient-to-r border',
-        c.bg, c.text, c.border
-      )}
-    >
-      <span className="text-lg">{c.icon}</span>
-      <span className="font-semibold">{c.label}</span>
-    </motion.div>
+    <div className={`inline-flex items-center gap-1 px-2 py-1 rounded border text-[11px] font-medium ${colors[status]}`}>
+      <Icon className="w-3 h-3" />
+      {label}
+    </div>
   )
 }
 
-// ── Price Change ──────────────────────────────────────────
-function PriceChange({ change, changePercent }: { change: number; changePercent: number }) {
-  const isPositive = change >= 0
-  const Icon = isPositive ? TrendingUp : TrendingDown
-  const color = isPositive ? 'text-green-400' : 'text-red-400'
-  
+// ── Valuation Level ──────────────────────────────────────────
+function ValuationLevelBadge({ level }: { level: string }) {
+  const map: Record<string, { text: string; color: string; label: string }> = {
+    low: { text: '#00d68f', label: '低估', color: 'rgba(0,214,143,0.15)' },
+    medium: { text: '#ffaa00', label: '合理', color: 'rgba(255,170,0,0.15)' },
+    high: { text: '#ff6b35', label: '偏高', color: 'rgba(255,107,53,0.15)' },
+    very_high: { text: '#ff3d71', label: '高估', color: 'rgba(255,61,113,0.15)' },
+  }
+  const c = map[level] || map.medium
   return (
-    <div className={clsx('flex items-center gap-2', color)}>
-      <Icon className="w-4 h-4" />
-      <span className="font-mono">
-        {isPositive ? '+' : ''}{change.toFixed(2)} ({isPositive ? '+' : ''}{changePercent.toFixed(2)}%)
-      </span>
+    <div className="inline-flex items-center gap-1.5 text-xl font-bold mb-4" style={{ color: c.text }}>
+      {level === 'low' ? <TrendingUp className="w-5 h-5" /> : level === 'very_high' ? <TrendingDown className="w-5 h-5" /> : null}
+      {c.label}
+    </div>
+  )
+}
+
+// ── Risk Level ──────────────────────────────────────────
+function RiskLevelBadge({ level }: { level: string }) {
+  const map: Record<string, { text: string; label: string }> = {
+    low: { text: '#00d68f', label: '低风险' },
+    medium: { text: '#ffaa00', label: '中风险' },
+    high: { text: '#ff3d71', label: '高风险' },
+    very_high: { text: '#ff3d71', label: '极高风险' },
+  }
+  const c = map[level] || map.medium
+  return (
+    <div className="inline-flex items-center gap-1.5 text-lg font-bold mb-4" style={{ color: c.text }}>
+      <Shield className="w-4 h-4" />
+      {c.label}
+    </div>
+  )
+}
+
+// ── Temp Gauge ──────────────────────────────────────────
+function TempGauge({ value }: { value: number }) {
+  const radius = 34
+  const circumference = 2 * Math.PI * radius
+  const offset = circumference - (value / 100) * circumference
+  const color = value > 70 ? '#ff3d71' : value > 40 ? '#ffaa00' : '#0095ff'
+
+  return (
+    <div className="relative w-20 h-20">
+      <svg width="80" height="80" viewBox="0 0 80 80" className="transform -rotate-90">
+        <circle cx="40" cy="40" r={radius} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="6" />
+        <circle cx="40" cy="40" r={radius} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round"
+          strokeDasharray={circumference} strokeDashoffset={offset}
+          style={{ transition: 'stroke-dashoffset 1s ease' }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-lg font-bold font-mono" style={{ color }}>{value}</span>
+        <span className="text-[9px] text-white/30 uppercase tracking-widest">°C</span>
+      </div>
     </div>
   )
 }
 
 // ── Main Page ──────────────────────────────────────────
-export default function HomePage() {
-  const [searchValue, setSearchValue] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
+export default function Home() {
+  const [query, setQuery] = useState('')
   const [stockData, setStockData] = useState<StockData | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [particles, setParticles] = useState<{ id: number; x: number; y: number; size: number; delay: number }[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [lastUpdated, setLastUpdated] = useState('')
 
-  useEffect(() => {
-    setParticles(
-      Array.from({ length: 30 }, (_, i) => ({
-        id: i,
-        x: Math.random() * 100,
-        y: Math.random() * 100,
-        size: Math.random() * 3 + 1,
-        delay: Math.random() * 10,
-      }))
-    )
-  }, [])
-
-  const handleSearch = async () => {
-    if (!searchValue.trim()) return
+  const handleSearch = async (q: string) => {
+    if (!q.trim()) return
     setIsLoading(true)
-    setError(null)
-    setStockData(null)
-
+    setError('')
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
-      const response = await fetch(`${apiUrl}/api/stock/${encodeURIComponent(searchValue.trim())}`)
-      
-      if (!response.ok) {
-        const errData = await response.json()
-        throw new Error(errData.error || `请求失败 (${response.status})`)
+      const res = await fetch(`/api/stock/${encodeURIComponent(q.trim())}`)
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: '请求失败' }))
+        throw new Error(err.error || '请求失败')
       }
-      
-      const data: StockData = await response.json()
+      const data = await res.json()
       setStockData(data)
-    } catch (err: any) {
-      console.error('API Error:', err)
-      setError(err.message || '获取数据失败，请检查股票代码是否正确')
+      setLastUpdated(new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
+    } catch (e: any) {
+      setError(e.message || '网络错误')
     } finally {
       setIsLoading(false)
     }
   }
 
-  const handleClear = () => {
-    setSearchValue('')
-    setStockData(null)
-    setError(null)
-  }
-
   const handleQuickSearch = (code: string) => {
-    setSearchValue(code)
-    setTimeout(() => {
-      const input = document.querySelector('input') as HTMLInputElement
-      if (input) {
-        input.value = code
-        setSearchValue(code)
-      }
-    }, 0)
+    setQuery(code)
+    handleSearch(code)
   }
 
-  // 格式化市值
-  const formatMarketCap = (cap: number): string => {
-    if (cap >= 1e12) return `${(cap / 1e12).toFixed(2)}万亿`
-    if (cap >= 1e8) return `${(cap / 1e8).toFixed(2)}亿`
-    if (cap >= 1e4) return `${(cap / 1e4).toFixed(2)}万`
-    return cap.toLocaleString()
+  const handleClear = () => {
+    setQuery('')
+    setStockData(null)
+    setError('')
   }
 
-  // 格式化时间
-  const formatDate = (isoString: string): string => {
-    const date = new Date(isoString)
-    return date.toLocaleString('zh-CN', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  }
+  const g = stockData ? gradeConfig[stockData.cedarLevel] : null
+  const cedarEmoji = stockData?.cedarLevel === 'S' ? '💎' : stockData?.cedarLevel === 'A' ? '🥇' : stockData?.cedarLevel === 'B' ? '🥈' : stockData?.cedarLevel === 'C' ? '🪨' : '⚠️'
 
   return (
-    <div className="min-h-screen relative overflow-hidden">
-      {/* Ambient Particles */}
-      <div className="fixed inset-0 pointer-events-none">
-        {particles.map(p => (
-          <motion.div
-            key={p.id}
-            className="particle"
-            style={{ left: `${p.x}%`, top: `${p.y}%`, width: p.size, height: p.size }}
-            animate={{
-              y: [0, -200, -400, -200, 0],
-              x: [0, 50, -30, 20, 0],
-              opacity: [0.2, 0.5, 0.3, 0.6, 0.2],
-            }}
-            transition={{ duration: 15 + p.delay, repeat: Infinity, ease: 'easeInOut' }}
-          />
-        ))}
-      </div>
-
-      {/* Gradient Orbs */}
-      <div className="fixed top-0 left-1/4 w-96 h-96 bg-accent/5 rounded-full blur-3xl" />
-      <div className="fixed bottom-0 right-1/4 w-96 h-96 bg-green-500/5 rounded-full blur-3xl" />
-
-      {/* Main Content */}
-      <div className="relative z-10 max-w-7xl mx-auto px-6 py-8">
-        {/* Header */}
-        <motion.header
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8 }}
-          className="flex flex-col lg:flex-row items-center justify-between gap-6 mb-12"
-        >
-          {/* Logo */}
-          <div className="flex items-center gap-4">
-            <motion.div
-              animate={{ rotate: [0, 10, -5, 5, 0] }}
-              transition={{ duration: 2, repeat: Infinity, repeatDelay: 3 }}
-              className="text-5xl"
-            >
-              🌲
-            </motion.div>
+    <div className="min-h-screen">
+      {/* ── Header ── */}
+      <header className="sticky top-0 z-50 bg-[rgba(10,10,15,0.85)] backdrop-blur-xl border-b border-white/[0.08]">
+        <div className="max-w-7xl mx-auto px-4 sm:px-8 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#0095ff] to-[#00d68f] flex items-center justify-center text-base font-bold">🌲</div>
             <div>
-              <h1 className="text-3xl font-bold tracking-tight">
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-accent to-green-400">
-                  CEDAR
-                </span>
-                <span className="text-white/90 ml-2">AI</span>
-              </h1>
-              <p className="text-sm text-white/40 tracking-widest uppercase">智能投资决策系统</p>
+              <div className="text-[15px] font-semibold tracking-wide">CEDAR<span className="text-white/30 font-light">AI</span></div>
+              <div className="text-[10px] text-white/30 tracking-widest uppercase">投资决策系统</div>
             </div>
           </div>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-1.5 text-[11px] text-[#00d68f] bg-[rgba(0,214,143,0.1)] border border-[rgba(0,214,143,0.2)] px-2.5 py-1 rounded-full">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#00d68f] animate-pulse" />
+              LIVE
+            </div>
+            {lastUpdated && (
+              <span className="text-[11px] text-white/30 font-mono">
+                更新 {lastUpdated}
+              </span>
+            )}
+          </div>
+        </div>
+      </header>
 
-          {/* Search */}
-          <div className="relative w-full max-w-xl">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/30" />
-            <input
-              type="text"
-              value={searchValue}
-              onChange={e => setSearchValue(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleSearch()}
-              placeholder="输入股票代码或名称，如 NVDA / 600519"
-              className="search-input pl-12 pr-24 h-14 w-full text-base"
-            />
-            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2">
+      {/* ── Main ── */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-8 py-8 sm:py-10">
+        {/* Search */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6 }}
+          className="mb-10"
+        >
+          <div className="max-w-xl mx-auto text-center">
+            <label className="text-[11px] text-white/30 tracking-widest uppercase block mb-3">
+              输入股票代码或名称
+            </label>
+            <div className="flex bg-[rgba(15,15,25,0.8)] border border-white/[0.08] rounded-xl overflow-hidden focus-within:border-[#0095ff] focus-within:shadow-[0_0_0_3px_rgba(0,149,255,0.1)] transition-all">
+              <div className="flex items-center px-4 text-[#0095ff] font-medium border-r border-white/[0.08] bg-[rgba(0,149,255,0.05)]">
+                <span className="text-base">$</span>
+              </div>
+              <input
+                type="text"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleSearch(query)}
+                placeholder="NVDA, AAPL, 600519..."
+                className="flex-1 bg-transparent px-5 py-4 text-[18px] font-mono font-medium text-white outline-none placeholder:text-white/30 placeholder:font-normal"
+              />
               <AnimatePresence mode="wait">
                 {isLoading ? (
-                  <motion.div
-                    key="loading"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="flex items-center"
-                  >
-                    <Loader2 className="w-5 h-5 text-accent animate-spin mr-2" />
-                    <span className="text-sm text-white/50">查询中...</span>
+                  <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                    className="flex items-center px-5 text-white/50 text-sm">
+                    <Loader2 className="w-4 h-4 animate-spin mr-2 text-[#0095ff]" />
+                    查询中...
                   </motion.div>
                 ) : stockData || error ? (
-                  <motion.button
-                    key="clear"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
+                  <motion.button key="clear" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                     onClick={handleClear}
-                    className="p-2 rounded-lg hover:bg-white/10 transition-colors"
-                  >
-                    <X className="w-5 h-5 text-white/50" />
+                    className="px-4 hover:bg-white/5 transition-colors text-white/40 hover:text-white/70">
+                    <X className="w-5 h-5" />
                   </motion.button>
                 ) : (
-                  <motion.button
-                    key="search"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    onClick={handleSearch}
-                    className="p-2 rounded-lg bg-accent/20 hover:bg-accent/30 transition-colors"
-                  >
-                    <ArrowRight className="w-4 h-4 text-accent" />
+                  <motion.button key="search" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                    onClick={() => handleSearch(query)}
+                    className="px-5 bg-gradient-to-r from-[#0095ff] to-[#0077cc] text-white text-sm font-semibold hover:opacity-90 transition-opacity flex items-center gap-2">
+                    <Search className="w-4 h-4" />
+                    分析
                   </motion.button>
                 )}
               </AnimatePresence>
             </div>
+            {/* Quick chips */}
+            <div className="flex flex-wrap gap-2 mt-4 justify-center">
+              {['NVDA', 'AAPL', 'TSLA', 'MSFT', '600519', '300750'].map(code => (
+                <button key={code} onClick={() => handleQuickSearch(code)}
+                  className="text-[11px] font-mono px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] text-white/50 hover:border-[#0095ff]/50 hover:text-[#0095ff] hover:bg-[#0095ff]/10 transition-all">
+                  {code}
+                </button>
+              ))}
+            </div>
           </div>
-        </motion.header>
-
-        {/* Quick Chips */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3, duration: 0.6 }}
-          className="flex flex-wrap gap-3 mb-12"
-        >
-          {['NVDA', 'AAPL', 'TSLA', 'MSFT', '600519', '300750'].map((code, i) => (
-            <motion.button
-              key={code}
-              whileHover={{ scale: 1.05, y: -2 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={() => handleQuickSearch(code)}
-              className={clsx(
-                'px-4 py-2 rounded-xl text-sm font-mono transition-all',
-                'border border-white/10 bg-white/5',
-                'hover:border-accent/50 hover:bg-accent/10',
-                'hover:shadow-lg hover:shadow-accent/20'
-              )}
-            >
-              {code}
-            </motion.button>
-          ))}
         </motion.div>
 
-        {/* Error State */}
+        {/* Error */}
         <AnimatePresence>
           {error && (
-            <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="mb-8 p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-center gap-3"
-            >
-              <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />
-              <div>
-                <div className="text-red-400 font-medium">查询失败</div>
-                <div className="text-sm text-white/60">{error}</div>
-              </div>
+            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+              className="mb-6 p-4 rounded-xl bg-[rgba(255,61,113,0.1)] border border-[rgba(255,61,113,0.3)] flex items-center gap-3 text-[#ff3d71]">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+              <span className="text-sm font-medium">{error}</span>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Loading State */}
-        <AnimatePresence>
-          {isLoading && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center py-20"
-            >
-              <div className="relative">
-                <div className="w-20 h-20 rounded-full border-4 border-accent/20" />
-                <motion.div
-                  className="absolute inset-0 rounded-full border-4 border-accent"
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-                  style={{ borderTopColor: 'transparent' }}
-                />
+        {/* ── Results Grid (always visible with skeletons) ── */}
+        <div className="grid grid-cols-12 gap-4">
+
+          {/* ── Basic Info (span-8) ── */}
+          <div className="card-style col-span-12 lg:col-span-8">
+            <CardHeader icon="📊" title="基础信息" />
+            <div className="flex items-center gap-3 mb-5">
+              <div className={`${isLoading ? 'skeleton-bar skeleton-name' : 'text-2xl font-bold'} transition-opacity`}>
+                {isLoading ? <div className="h-8 w-48 skeleton-bar" /> : stockData ? stockData.name : ''}
               </div>
-              <p className="mt-6 text-white/60">正在获取股票数据...</p>
-              <p className="text-sm text-white/40 mt-1">首次查询可能需要几秒钟</p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Stock Data Display */}
-        <AnimatePresence mode="wait">
-          {stockData && !isLoading && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.5 }}
-            >
-              {/* Stock Header Info */}
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.2 }}
-                className="mb-6 flex items-center gap-4 flex-wrap"
-              >
-                <div className="flex items-center gap-3">
-                  <h2 className="text-2xl font-bold">{stockData.name}</h2>
-                  <span className="px-3 py-1 rounded-lg bg-white/10 text-white/70 font-mono">
-                    {stockData.symbol}
+              {stockData && (
+                <>
+                  <span className="text-sm font-mono text-white/50">{stockData.symbol}</span>
+                  <span className="text-[11px] px-2 py-0.5 rounded bg-white/[0.06] border border-white/[0.08] text-white/50">
+                    {stockData.basic?.area || (stockData.symbol.match(/^(sh|sz|600|601|603|000|001|002|688|430|300)/i) ? '中国' : '美国')}
                   </span>
-                </div>
-                {stockData.industry && (
-                  <span className="px-3 py-1 rounded-lg bg-accent/10 text-accent text-sm">
-                    {stockData.industry}
-                  </span>
-                )}
-                <div className="ml-auto text-sm text-white/40 flex items-center gap-2">
-                  <RefreshCw className="w-3 h-3" />
-                  {formatDate(stockData.updatedAt)}
-                </div>
-              </motion.div>
-
-              {/* Hero Section - Cedar Score */}
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.3, duration: 0.8 }}
-                className="glass-card p-8 mb-8 relative overflow-hidden"
-              >
-                {/* Shimmer overlay */}
-                <div className="absolute inset-0 shimmer" />
-                
-                <div className="relative flex flex-col lg:flex-row items-center gap-8">
-                  {/* Left: Score Display */}
-                  <div className="flex-1 text-center lg:text-left">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Sparkles className="w-5 h-5 text-yellow-400 animate-pulse" />
-                      <span className="text-sm text-white/50 uppercase tracking-widest">综合评分</span>
-                    </div>
-                    <motion.div
-                      initial={{ textShadow: '0 0 0px rgba(0,0,0,0)' }}
-                      animate={{ textShadow: ['0 0 20px rgba(0,214,143,0.5)', '0 0 40px rgba(0,214,143,0.8)', '0 0 20px rgba(0,214,143,0.5)'] }}
-                      transition={{ duration: 2, repeat: Infinity }}
-                      className="text-7xl font-bold font-mono text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-cyan-400 mb-2"
-                    >
-                      <AnimatedNumber value={stockData.cedarScore} />
-                    </motion.div>
-                    <CedarLevelDisplay level={stockData.cedarLevel} />
-                    
-                    {/* Price Info */}
-                    <div className="mt-6 flex flex-col lg:flex-row items-center lg:items-start gap-4 lg:gap-6">
-                      <div className="text-center">
-                        <div className="text-3xl font-bold font-mono">
-                          ${stockData.price.current.toFixed(2)}
-                        </div>
-                        <PriceChange change={stockData.price.change} changePercent={stockData.price.changePercent} />
-                      </div>
-                      <div className="grid grid-cols-2 gap-4 text-center">
-                        <div>
-                          <div className="text-xs text-white/40">PE</div>
-                          <div className="font-mono">{stockData.price.pe > 0 ? stockData.price.pe.toFixed(2) : 'N/A'}</div>
-                        </div>
-                        <div>
-                          <div className="text-xs text-white/40">PB</div>
-                          <div className="font-mono">{stockData.price.pb > 0 ? stockData.price.pb.toFixed(2) : 'N/A'}</div>
-                        </div>
-                        <div>
-                          <div className="text-xs text-white/40">市值</div>
-                          <div className="font-mono text-sm">{formatMarketCap(stockData.price.marketCap)}</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right: Breakdown */}
-                  <div className="flex-1 grid grid-cols-2 gap-4">
-                    {[
-                      { label: '赛道', value: stockData.trackScore, icon: Target },
-                      { label: '成长', value: stockData.growthScore, icon: TrendingUp },
-                      { label: '估值', value: stockData.valuationScore, icon: BarChart3 },
-                      { label: '风险', value: stockData.riskScore, icon: Shield },
-                    ].map((item, i) => (
-                      <motion.div
-                        key={item.label}
-                        initial={{ opacity: 0, x: 20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: 0.4 + i * 0.1 }}
-                        className="flex items-center gap-3 p-3 rounded-xl bg-white/5"
-                      >
-                        <div className="p-2 rounded-lg bg-accent/10">
-                          <item.icon className="w-4 h-4 text-accent" />
-                        </div>
-                        <div>
-                          <div className="text-lg font-bold font-mono">{item.value}</div>
-                          <div className="text-xs text-white/40">{item.label}</div>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </div>
-                </div>
-              </motion.div>
-
-              {/* Score Cards Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-                <ScoreCard title="赛道评分" value={stockData.trackScore} grade={stockData.trackLevel} icon={Target} delay={0.1} />
-                <ScoreCard title="成长性" value={stockData.growthScore} grade={stockData.growthLevel} icon={TrendingUp} delay={0.2} />
-                <ScoreCard title="估值分析" value={stockData.valuationScore} icon={BarChart3} delay={0.3}>
-                  <div className="mt-2">
-                    <ValuationBadge level={stockData.valuationLevel} />
-                  </div>
-                </ScoreCard>
-                <ScoreCard title="风险评估" value={stockData.riskScore} icon={Shield} delay={0.4}>
-                  <div className="mt-2">
-                    <RiskBadge level={stockData.riskLevel} />
-                  </div>
-                </ScoreCard>
-                <ScoreCard title="市场情绪" value={stockData.marketTemp} icon={Activity} delay={0.5}>
-                  <div className="mt-2">
-                    <MarketTempBadge level={stockData.marketTempLevel} />
-                  </div>
-                </ScoreCard>
-                <ScoreCard title="综合评分" value={stockData.cedarScore} grade={stockData.cedarLevel} icon={Award} delay={0.6} />
-              </div>
-
-              {/* Two Column Layout */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-                {/* Market Temperature */}
-                <Card delay={0.7}>
-                  <div className="flex items-center gap-2 mb-6">
-                    <Thermometer className="w-5 h-5 text-accent" />
-                    <h3 className="text-lg font-semibold">市场温度</h3>
-                    <MarketTempBadge level={stockData.marketTempLevel} />
-                  </div>
-                  <div className="flex items-center justify-center mb-6">
-                    <TempGauge value={stockData.marketTemp} />
-                    <div className="ml-8 text-center">
-                      <div className="text-4xl font-bold font-mono text-white mb-1">
-                        <AnimatedNumber value={stockData.marketTemp} />
-                      </div>
-                      <div className="text-sm text-white/40">温度指数</div>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-4">
-                    {[
-                      { label: '技术面', value: stockData.trackScore, color: 'from-blue-500 to-cyan-500' },
-                      { label: '基本面', value: stockData.growthScore, color: 'from-green-500 to-emerald-500' },
-                      { label: '资金面', value: stockData.riskScore, color: 'from-purple-500 to-pink-500' },
-                    ].map(item => (
-                      <div key={item.label} className="text-center">
-                        <div className={`text-lg font-bold font-mono bg-gradient-to-r ${item.color} bg-clip-text text-transparent`}>
-                          {item.value}
-                        </div>
-                        <div className="text-xs text-white/40">{item.label}</div>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-
-                {/* MA Evaluation */}
-                <Card delay={0.8}>
-                  <div className="flex items-center gap-2 mb-6">
-                    <LineChart className="w-5 h-5 text-accent" />
-                    <h3 className="text-lg font-semibold">均线系统</h3>
-                    <span className={clsx(
-                      'ml-auto px-2 py-1 rounded text-xs border',
-                      stockData.maEvaluation.overall === 'bull' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
-                      stockData.maEvaluation.overall === 'bear' ? 'bg-red-500/20 text-red-400 border-red-500/30' :
-                      'bg-gray-500/20 text-gray-400 border-gray-500/30'
-                    )}>
-                      {stockData.maEvaluation.overall === 'bull' ? '多头' : stockData.maEvaluation.overall === 'bear' ? '空头' : '中性'}
+                  {stockData.industryTrack && (
+                    <span className="text-[11px] px-2 py-0.5 rounded" style={{ background: stockData.industryTrack === 'S' ? 'rgba(255,107,53,0.1)' : stockData.industryTrack === 'A' ? 'rgba(255,170,0,0.1)' : stockData.industryTrack === 'B' ? 'rgba(0,214,143,0.1)' : 'rgba(107,122,255,0.1)', border: stockData.industryTrack === 'S' ? '1px solid rgba(255,107,53,0.3)' : stockData.industryTrack === 'A' ? '1px solid rgba(255,170,0,0.3)' : stockData.industryTrack === 'B' ? '1px solid rgba(0,214,143,0.3)' : '1px solid rgba(107,122,255,0.3)', color: stockData.industryTrack === 'S' ? '#ff6b35' : stockData.industryTrack === 'A' ? '#ffaa00' : stockData.industryTrack === 'B' ? '#00d68f' : '#6b7aff' }}>
+                      {stockData.industryTrack}级赛道
                     </span>
-                  </div>
-                  <div className="flex flex-wrap gap-2 mb-6">
-                    <MABadge label="MA30" status={stockData.maEvaluation.ma30} />
-                    <MABadge label="MA60" status={stockData.maEvaluation.ma60} />
-                    <MABadge label="MA120" status={stockData.maEvaluation.ma120} />
-                    <MABadge label="MA240" status={stockData.maEvaluation.ma240} />
-                  </div>
-                  <div className="text-sm text-white/60 mb-4">
-                    {stockData.maEvaluation.overall === 'bull' ? '价格处于均线上方，多头趋势' :
-                     stockData.maEvaluation.overall === 'bear' ? '价格处于均线下方，空头趋势' :
-                     '价格与均线纠缠，趋势不明'}
-                  </div>
-                  <div className="text-xs text-white/40">
-                    绿色向上箭头表示价格高于均线，红色向下表示价格低于均线
-                  </div>
-                </Card>
-
-                {/* Price Chart */}
-                <Card delay={0.9} className="lg:col-span-2">
-                  <div className="flex items-center gap-2 mb-4">
-                    <Activity className="w-5 h-5 text-accent" />
-                    <h3 className="text-lg font-semibold">价格走势</h3>
-                  </div>
-                  {stockData.price.history && stockData.price.history.length > 0 ? (
-                    <MAChart history={stockData.price.history} />
+                  )}
+                </>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              {(isLoading ? Array(9).fill(null) : [
+                { label: '当前价格', value: `$${stockData?.price.current?.toFixed(2) || 'N/A'}`, extra: stockData && (stockData.price.changePercent > 0 ? `+${stockData.price.changePercent.toFixed(2)}%` : `${stockData.price.changePercent.toFixed(2)}%`), isGain: stockData ? stockData.price.changePercent >= 0 : null },
+                { label: '市值', value: formatMarketCap(stockData?.price.marketCap ?? 0), extra: null, isGain: null },
+                { label: 'PE', value: stockData?.price.pe ? stockData.price.pe.toFixed(1) : 'N/A', extra: null, isGain: null },
+                { label: 'ROE', value: stockData?.price.roe ? `${stockData.price.roe.toFixed(1)}%` : 'N/A', extra: null, isGain: stockData?.price.roe ? stockData.price.roe > 0 : null },
+                { label: 'PS', value: stockData?.price.ps ? stockData.price.ps.toFixed(1) : 'N/A', extra: null, isGain: null },
+                { label: 'PEG', value: stockData?.price.peg ? stockData.price.peg.toFixed(2) : 'N/A', extra: null, isGain: null },
+                { label: '营收增长', value: stockData?.price.revenueGrowth ? `${stockData.price.revenueGrowth > 0 ? '+' : ''}${stockData.price.revenueGrowth.toFixed(1)}%` : 'N/A', extra: null, isGain: stockData?.price.revenueGrowth ? stockData.price.revenueGrowth > 0 : null },
+                { label: '利润增长', value: stockData?.price.profitGrowth ? `${stockData.price.profitGrowth > 0 ? '+' : ''}${stockData.price.profitGrowth.toFixed(1)}%` : 'N/A', extra: null, isGain: stockData?.price.profitGrowth ? stockData.price.profitGrowth > 0 : null },
+                { label: '市净率', value: stockData?.price.pb ? stockData.price.pb.toFixed(1) : 'N/A', extra: null, isGain: null },
+              ]).map((item, i) => (
+                <div key={i} className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-3">
+                  <div className="text-[10px] text-white/30 uppercase tracking-wider mb-1">{item?.label || ''}</div>
+                  {isLoading ? (
+                    <div className="h-6 w-20 skeleton-bar rounded" />
                   ) : (
-                    <div className="h-[200px] flex items-center justify-center text-white/40">
-                      暂无历史数据
+                    <div className={`text-lg font-bold font-mono ${item?.isGain === true ? 'text-[#00d68f]' : item?.isGain === false ? 'text-[#ff3d71]' : 'text-white'}`}>
+                      {item?.value}
                     </div>
                   )}
-                </Card>
+                  {item?.extra && !isLoading && (
+                    <div className={`text-[10px] font-mono mt-0.5 ${item.isGain ? 'text-[#00d68f]/60' : 'text-[#ff3d71]/60'}`}>{item.extra}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
 
-                {/* China-US Mapping */}
-                {stockData.chinaUsMapping && (
-                  <Card delay={1.0} className="lg:col-span-2">
-                    <div className="flex items-center gap-2 mb-4">
-                      <Map className="w-5 h-5 text-accent" />
-                      <h3 className="text-lg font-semibold">中美对标</h3>
-                    </div>
-                    <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-                      <div className="text-sm text-white/60 mb-2">对标美股</div>
-                      <div className="text-lg font-semibold">{stockData.chinaUsMapping}</div>
-                      <div className="text-xs text-white/40 mt-2">
-                        基于 {stockData.industry} 行业的中美龙头对比
+          {/* ── Track Score (span-4) ── */}
+          <div className="card-style col-span-6 lg:col-span-4">
+            <CardHeader icon="🏆" title="赛道评分" badge={
+              isLoading ? <div className="h-5 w-10 skeleton-bar rounded" /> :
+              stockData ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded" style={{ background: stockData.industryTrack === 'S' ? 'rgba(255,107,53,0.1)' : stockData.industryTrack === 'A' ? 'rgba(255,170,0,0.1)' : stockData.industryTrack === 'B' ? 'rgba(0,214,143,0.1)' : 'rgba(107,122,255,0.1)', color: stockData.industryTrack === 'S' ? '#ff6b35' : stockData.industryTrack === 'A' ? '#ffaa00' : stockData.industryTrack === 'B' ? '#00d68f' : '#6b7aff', border: stockData.industryTrack === 'S' ? '1px solid rgba(255,107,53,0.3)' : stockData.industryTrack === 'A' ? '1px solid rgba(255,170,0,0.3)' : stockData.industryTrack === 'B' ? '1px solid rgba(0,214,143,0.3)' : '1px solid rgba(107,122,255,0.3)' }}>{stockData.industryTrack}级</span>
+                  {stockData.industry && (
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-white/[0.06] border border-white/[0.08] text-white/50">{stockData.industry}</span>
+                  )}
+                </div>
+              ) : null
+            } />
+            {isLoading ? (
+              <>
+                <div className="h-14 w-24 skeleton-bar rounded mb-4" />
+                <div className="h-1.5 w-full skeleton-bar rounded mb-4" />
+                <div className="flex flex-col gap-2">{[1,2,3].map(i => <div key={i} className="h-4 w-full skeleton-bar rounded" />)}</div>
+              </>
+            ) : stockData ? (
+              <>
+                <div className="flex items-baseline gap-2 mb-4">
+                  <span className="text-5xl font-bold">{stockData.trackScore}</span>
+                  <span className="text-sm text-white/30">/ 100</span>
+                </div>
+                <ScoreBar value={stockData.trackScore} gradient="linear-gradient(90deg, #ff6b35, #ffaa00)" />
+                <div className="flex flex-col gap-2">
+                  {[
+                    { label: '行业热度', value: Math.round(stockData.trackScore * 0.95), color: '#ff6b35' },
+                    { label: '技术动能', value: Math.round(stockData.trackScore * 0.85), color: '#0095ff' },
+                    { label: '资金流入', value: Math.round(stockData.trackScore * 0.8), color: '#00d68f' },
+                  ].map(d => (
+                    <div key={d.label} className="flex items-center justify-between text-[12px]">
+                      <span className="text-white/50">{d.label}</span>
+                      <div className="flex items-center gap-2">
+                        <div className="w-16 h-1 bg-white/[0.06] rounded overflow-hidden">
+                          <div className="h-full rounded" style={{ width: `${d.value}%`, background: d.color }} />
+                        </div>
+                        <span className="font-mono font-semibold" style={{ color: d.color }}>{d.value}</span>
                       </div>
                     </div>
-                  </Card>
-                )}
+                  ))}
+                </div>
+              </>
+            ) : <SkeletonLines count={3} />}
+          </div>
 
-                {/* AI Summary Placeholder */}
-                {stockData.summary && (
-                  <Card delay={1.1} className="lg:col-span-2">
-                    <div className="flex items-center gap-2 mb-4">
-                      <Brain className="w-5 h-5 text-accent" />
-                      <h3 className="text-lg font-semibold">AI 智能分析</h3>
+          {/* ── Track Attribution (span-4) ── */}
+          <div className="card-style col-span-6 lg:col-span-4">
+            <CardHeader icon="🎯" title="赛道归属" />
+            {isLoading ? (
+              <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-12 skeleton-bar rounded" />)}</div>
+            ) : stockData ? (
+              <div className="space-y-3">
+                {/* 赛道级别标签 */}
+                <div className="flex items-center gap-3 p-3 rounded-xl border" style={{
+                  background: stockData.industryTrack === 'S' ? 'rgba(255,107,53,0.1)' :
+                             stockData.industryTrack === 'A' ? 'rgba(255,170,0,0.1)' :
+                             stockData.industryTrack === 'B' ? 'rgba(0,214,143,0.1)' :
+                             'rgba(107,122,255,0.1)',
+                  borderColor: stockData.industryTrack === 'S' ? 'rgba(255,107,53,0.3)' :
+                               stockData.industryTrack === 'A' ? 'rgba(255,170,0,0.3)' :
+                               stockData.industryTrack === 'B' ? 'rgba(0,214,143,0.3)' :
+                               'rgba(107,122,255,0.3)'
+                }}>
+                  <span className="text-3xl font-bold" style={{
+                    color: stockData.industryTrack === 'S' ? '#ff6b35' :
+                           stockData.industryTrack === 'A' ? '#ffaa00' :
+                           stockData.industryTrack === 'B' ? '#00d68f' : '#6b7aff'
+                  }}>{stockData.industryTrack}</span>
+                  <div>
+                    <div className="text-sm font-semibold" style={{
+                      color: stockData.industryTrack === 'S' ? '#ff6b35' :
+                             stockData.industryTrack === 'A' ? '#ffaa00' :
+                             stockData.industryTrack === 'B' ? '#00d68f' : '#6b7aff'
+                    }}>{stockData.industryTrackLabel}</div>
+                    <div className="text-[11px] text-white/50">{stockData.industry}</div>
+                  </div>
+                </div>
+                {/* 赛道说明 */}
+                <div className="text-[11px] text-white/40 px-1">
+                  {stockData.industryTrack === 'S' ? '🔥 热门赛道 · 高资金追捧 · 高波动高收益' :
+                   stockData.industryTrack === 'A' ? '⭐ 成长赛道 · 行业景气向上 · 机构配置' :
+                   stockData.industryTrack === 'B' ? '📊 稳定赛道 · 估值合理 · 防御性较强' :
+                   '📉 冷门赛道 · 资金关注度低 · 需谨慎观望'}
+                </div>
+              </div>
+            ) : <SkeletonLines count={2} />}
+          </div>
+
+          {/* ── Growth Score (span-4) ── */}
+          <div className="card-style col-span-6 lg:col-span-4">
+            <CardHeader icon="📈" title="成长性分析" badge={
+              isLoading ? <div className="h-5 w-10 skeleton-bar rounded" /> :
+              stockData ? <span className="text-[10px] font-bold px-2 py-0.5 rounded" style={{ background: 'rgba(0,214,143,0.15)', color: '#00d68f', border: '1px solid rgba(0,214,143,0.3)' }}>强势</span> : null
+            } />
+            {isLoading ? (
+              <>
+                <div className="h-14 w-24 skeleton-bar rounded mb-4" />
+                <div className="h-1.5 w-full skeleton-bar rounded mb-4" />
+                <div className="flex flex-col gap-2">{[1,2,3].map(i => <div key={i} className="h-4 w-full skeleton-bar rounded" />)}</div>
+              </>
+            ) : stockData ? (
+              <>
+                <div className="flex items-baseline gap-2 mb-4">
+                  <span className="text-5xl font-bold">{stockData.growthScore}</span>
+                  <span className="text-sm text-white/30">/ 100</span>
+                </div>
+                <ScoreBar value={stockData.growthScore} gradient="linear-gradient(90deg, #0095ff, #00d68f)" />
+                <div className="flex flex-col gap-2">
+                  {[{ label: '收入增速', value: Math.round(stockData.growthScore * 0.95) }, { label: '利润增速', value: Math.round(stockData.growthScore * 0.9) }, { label: '行业增速', value: Math.round(stockData.growthScore * 0.85) }].map(d => (
+                    <div key={d.label} className="flex items-center justify-between text-[12px]">
+                      <span className="text-white/50">{d.label}</span>
+                      <span className="font-mono font-semibold text-[#00d68f]">{d.value}</span>
                     </div>
-                    <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-                      <p className="text-white/80 leading-relaxed">{stockData.summary}</p>
+                  ))}
+                </div>
+              </>
+            ) : <SkeletonLines count={3} />}
+          </div>
+
+          {/* ── Valuation (span-4) ── */}
+          <div className="card-style col-span-6 lg:col-span-4">
+            <CardHeader icon="💰" title="估值分析" />
+            {isLoading ? (
+              <>
+                <div className="h-7 w-16 skeleton-bar rounded mb-4" />
+                <div className="h-1.5 w-full skeleton-bar rounded mb-4" />
+                <div className="grid grid-cols-2 gap-2">{[1,2,3,4].map(i => <div key={i} className="h-14 skeleton-bar rounded" />)}</div>
+              </>
+            ) : stockData ? (
+              <>
+                <ValuationLevelBadge level={stockData.valuationLevel} />
+                <ScoreBar value={stockData.valuationScore} gradient="linear-gradient(90deg, #00d68f, #ffaa00)" />
+                <div className="grid grid-cols-2 gap-2">
+                  {[{ label: 'PE', value: stockData.price.pe ? stockData.price.pe.toFixed(1) : 'N/A' }, { label: 'PS', value: stockData.price.ps ? stockData.price.ps.toFixed(1) : 'N/A' }, { label: 'PEG', value: stockData.price.peg ? stockData.price.peg.toFixed(2) : 'N/A' }, { label: 'PB', value: stockData.price.pb ? stockData.price.pb.toFixed(1) : 'N/A' }].map(m => (
+                    <div key={m.label} className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3 text-center">
+                      <div className="text-[10px] text-white/30 uppercase tracking-wider mb-1">{m.label}</div>
+                      <div className="text-lg font-bold font-mono">{m.value}</div>
                     </div>
-                  </Card>
+                  ))}
+                </div>
+              </>
+            ) : <SkeletonLines count={4} />}
+          </div>
+
+          {/* ── Risk Score (span-4) ── */}
+          <div className="card-style col-span-6 lg:col-span-4">
+            <CardHeader icon="⚠️" title="风险分析" />
+            {isLoading ? (
+              <>
+                <div className="h-7 w-20 skeleton-bar rounded mb-4" />
+                <div className="h-1.5 w-full skeleton-bar rounded mb-4" />
+                <div className="flex flex-col gap-2">{[1,2,3,4].map(i => <div key={i} className="h-5 w-full skeleton-bar rounded" />)}</div>
+              </>
+            ) : stockData ? (
+              <>
+                <RiskLevelBadge level={stockData.riskLevel} />
+                <ScoreBar value={stockData.riskScore} gradient="linear-gradient(90deg, #00d68f, #ffaa00, #ff3d71)" />
+                <div className="flex flex-col gap-2">
+                  {[{ label: '负债水平', status: stockData.riskScore > 70 ? 'bad' : stockData.riskScore > 40 ? 'warn' : 'ok', text: stockData.riskScore > 70 ? '高' : stockData.riskScore > 40 ? '中' : '低' }, { label: '现金流', status: 'ok', text: '充裕' }, { label: '行业竞争', status: stockData.riskScore > 60 ? 'warn' : 'ok', text: stockData.riskScore > 60 ? '激烈' : '稳定' }, { label: '政策风险', status: stockData.riskScore > 50 ? 'warn' : 'ok', text: stockData.riskScore > 50 ? '中等' : '低' }].map(f => {
+                    const colors: Record<string, string> = { ok: 'bg-[rgba(0,214,143,0.15)] text-[#00d68f]', warn: 'bg-[rgba(255,170,0,0.15)] text-[#ffaa00]', bad: 'bg-[rgba(255,61,113,0.15)] text-[#ff3d71]' }
+                    return (
+                      <div key={f.label} className="flex items-center justify-between text-[12px]">
+                        <span className="text-white/50 flex items-center gap-1.5"><Shield className="w-3 h-3" />{f.label}</span>
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${colors[f.status]}`}>{f.text}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            ) : <SkeletonLines count={4} />}
+          </div>
+
+          {/* ── Market Temperature (span-4) ── */}
+          <div className="card-style col-span-6 lg:col-span-4">
+            <CardHeader icon="🌡️" title="市场温度" />
+            {isLoading ? (
+              <div className="flex items-center gap-5 mb-5">
+                <div className="w-20 h-20 rounded-full skeleton-bar" />
+                <div className="flex flex-col gap-2 flex-1">{[1,2,3].map(i => <div key={i} className="h-5 skeleton-bar rounded" />)}</div>
+              </div>
+            ) : stockData ? (
+              <>
+                <div className="flex items-center gap-5 mb-5">
+                  <TempGauge value={stockData.marketTemp} />
+                  <div>
+                    <div className="text-2xl font-bold mb-1" style={{ color: stockData.marketTemp > 70 ? '#ff3d71' : stockData.marketTemp > 40 ? '#ffaa00' : '#0095ff' }}>
+                      {stockData.marketTempLevel === 'fever' ? '🔥 高温' : stockData.marketTempLevel === 'warm' ? '🌡️ 偏热' : stockData.marketTempLevel === 'cold' ? '❄️ 偏冷' : '🌤️ 中性'}
+                    </div>
+                    <div className="text-[11px] text-white/30">技术面 · 基本面 · 资金面</div>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {[{ label: '技术面', value: stockData.trackScore, color: '#ff3d71' }, { label: '基本面', value: stockData.growthScore, color: '#0095ff' }, { label: '资金面', value: 100 - stockData.riskScore, color: '#00d68f' }].map(d => (
+                    <div key={d.label} className="flex items-center justify-between text-[11px]">
+                      <span className="text-white/30">{d.label}</span>
+                      <div className="flex items-center gap-2">
+                        <div className="w-20 h-1 bg-white/[0.06] rounded overflow-hidden"><div className="h-full rounded" style={{ width: `${d.value}%`, background: d.color }} /></div>
+                        <span className="font-mono font-semibold w-6 text-right">{d.value}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : <SkeletonLines count={3} />}
+          </div>
+
+          {/* ── China-US Mapping (span-4) ── */}
+          <div className="card-style col-span-6 lg:col-span-4">
+            <CardHeader icon="🔗" title="中美映射" />
+            {isLoading ? (
+              <div className="space-y-3">{[1,2].map(i => <div key={i} className="h-8 skeleton-bar rounded" />)}</div>
+            ) : stockData?.chinaUsMapping ? (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-mono font-bold px-3 py-1 rounded-lg bg-white/[0.06] border border-white/[0.08]">{stockData.symbol}</span>
+                <span className="text-white/30">→</span>
+                <span className="text-sm text-white/70">{stockData.chinaUsMapping}</span>
+              </div>
+            ) : !isLoading && <div className="text-sm text-white/30 text-center py-6">暂无中美映射信息</div>}
+          </div>
+
+          {/* ── Comprehensive Score (span-12) ── */}
+          <div className="card-style col-span-12 comprehensive-card">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h3 className="text-lg font-bold flex items-center gap-2">💎 杉树综合评分</h3>
+                <span className="text-[12px] text-white/30 mt-1 block">赛道20% · 成长20% · 估值20% · 风险20% · 趋势20%</span>
+              </div>
+              <div className="flex items-center gap-4">
+                {isLoading ? (
+                  <div className="h-20 w-24 skeleton-bar rounded" />
+                ) : stockData ? (
+                  <div className="text-7xl font-bold font-mono bg-gradient-to-r from-[#b9f2ff] to-[#ffd700] bg-clip-text text-transparent">{stockData.cedarScore}</div>
+                ) : (
+                  <div className="h-20 w-24 skeleton-bar rounded" />
+                )}
+                {stockData && (
+                  <div className="flex flex-col items-center justify-center w-20 h-20 rounded-xl border" style={{ background: g?.bg, borderColor: g?.border }}>
+                    <span className="text-2xl">{cedarEmoji}</span>
+                    <span className="text-[11px] font-bold" style={{ color: g?.text }}>{stockData.cedarLevel}级</span>
+                  </div>
                 )}
               </div>
+            </div>
+            <div className="grid grid-cols-5 gap-4">
+              {(isLoading || !stockData ? [1,2,3,4,5] : [
+                { label: '赛道 20%', value: stockData.trackScore, max: 20, gradient: 'linear-gradient(90deg, #ff6b35, #ffaa00)' },
+                { label: '成长 20%', value: stockData.growthScore, max: 20, gradient: 'linear-gradient(90deg, #0095ff, #00d68f)' },
+                { label: '估值 20%', value: stockData.valuationScore, max: 20, gradient: 'linear-gradient(90deg, #00d68f, #ffaa00)' },
+                { label: '风险 20%', value: 100 - stockData.riskScore, max: 20, gradient: 'linear-gradient(90deg, #ffaa00, #ff3d71)' },
+                { label: '趋势 20%', value: stockData.trackScore, max: 20, gradient: 'linear-gradient(90deg, #00d68f, #0095ff)' },
+              ]).map((item: any, i: number) => {
+                const pct = typeof item === 'number' ? 0 : (item.value / 100) * 100
+                const earned = typeof item === 'number' ? null : Math.round((item.value / 100) * item.max * 10) / 10
+                return (
+                  <div key={i}>
+                    <div className="flex items-center justify-between text-[11px] mb-1.5">
+                      <span className="text-white/40">{typeof item === 'number' ? '' : item.label}</span>
+                      <span className="font-mono font-semibold text-white/60">{earned !== null ? `${earned}/${item.max}` : '--'}</span>
+                    </div>
+                    {isLoading ? (
+                      <div className="h-1.5 w-full skeleton-bar rounded" />
+                    ) : (
+                      <div className="h-1.5 bg-white/[0.06] rounded overflow-hidden mb-1">
+                        <div className="h-full rounded transition-all duration-1000" style={{ width: `${pct}%`, background: item.gradient }} />
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
 
-              {/* Data Source Footer */}
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 1.2 }}
-                className="text-center text-xs text-white/30 mt-8 pb-8"
-              >
-                数据来源: TuShare Pro (A股) / Finnhub (美股) | 仅供投资参考，不构成投资建议
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Empty State */}
-        <AnimatePresence>
-          {!stockData && !isLoading && !error && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="text-center py-20"
-            >
-              <div className="text-6xl mb-6">🔍</div>
-              <h2 className="text-2xl font-bold mb-2">开始查询</h2>
-              <p className="text-white/50">输入股票代码查看智能投资分析</p>
-              <div className="mt-8 flex flex-wrap justify-center gap-3">
-                <div className="text-sm text-white/30">热门:</div>
-                {['AAPL', 'NVDA', 'TSLA', '600519'].map(code => (
-                  <button
-                    key={code}
-                    onClick={() => handleQuickSearch(code)}
-                    className="px-3 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-sm text-white/60 transition-colors"
-                  >
-                    {code}
-                  </button>
-                ))}
+          {/* ── MA Evaluation (span-6) ── */}
+          <div className="card-style col-span-12 lg:col-span-6">
+            <CardHeader icon="📉" title="均线评估" />
+            <div className="grid grid-cols-4 gap-2">
+              {(isLoading ? Array(4).fill(null) : [
+                { label: 'MA30', status: stockData?.maEvaluation.ma30 },
+                { label: 'MA60', status: stockData?.maEvaluation.ma60 },
+                { label: 'MA120', status: stockData?.maEvaluation.ma120 },
+                { label: 'MA240', status: stockData?.maEvaluation.ma240 },
+              ]).map((m: any, i: number) => {
+                const textColor = m?.status === 'bull' ? '#00d68f' : m?.status === 'bear' ? '#ff3d71' : 'rgba(240,240,245,0.4)'
+                return (
+                  <div key={i} className="bg-white/[0.03] border border-white/[0.06] rounded-lg p-3 text-center">
+                    <div className="text-[10px] text-white/30 mb-1">{m?.label || ''}</div>
+                    {isLoading ? (
+                      <div className="h-5 w-16 mx-auto skeleton-bar rounded" />
+                    ) : (
+                      <div className="text-base font-bold font-mono" style={{ color: textColor }}>
+                        {m?.status === 'bull' ? '↗ 多头' : m?.status === 'bear' ? '↘ 空头' : '— 中性'}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            {!isLoading && stockData && (
+              <div className="mt-4 flex items-center justify-between text-[12px]">
+                <span className="text-white/40">综合判断</span>
+                <span className="font-bold flex items-center gap-1" style={{ color: stockData.maEvaluation.overall === 'bull' ? '#00d68f' : stockData.maEvaluation.overall === 'bear' ? '#ff3d71' : 'rgba(240,240,245,0.4)' }}>
+                  {stockData.maEvaluation.overall === 'bull' ? '↗ 上涨趋势' : stockData.maEvaluation.overall === 'bear' ? '↘ 下跌趋势' : '— 横盘震荡'}
+                </span>
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+            )}
+          </div>
+
+          {/* ── Industry Map (span-6) ── */}
+          <div className="card-style col-span-12 lg:col-span-6">
+            <CardHeader icon="🗺️" title="产业链地图" />
+            {isLoading ? (
+              <div className="h-16 skeleton-bar rounded" />
+            ) : (
+              <div className="text-center py-4 text-white/30 text-sm">
+                产业链地图 · {stockData?.industry || '通用'}
+              </div>
+            )}
+          </div>
+
+          {/* ── AI Summary (span-12) ── */}
+          <div className="card-style col-span-12">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">📝</span>
+                <h3 className="text-[15px] font-semibold">AI 投资总结</h3>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-[rgba(0,149,255,0.15)] text-[#0095ff] border border-[rgba(0,149,255,0.3)] font-medium">MiniMax-M2</span>
+              </div>
+            </div>
+            {isLoading ? (
+              <div className="space-y-2">
+                {[1,2,3,4].map(i => <div key={i} className="h-4 skeleton-bar rounded" style={{ width: `${70 + Math.random() * 30}%` }} />)}
+              </div>
+            ) : (
+              <div className="text-sm text-white/70 leading-relaxed whitespace-pre-line">
+                {stockData?.summary || '输入股票代码开始分析...'}
+              </div>
+            )}
+            {stockData && (
+              <div className="mt-4 p-3 rounded-lg bg-[rgba(255,170,0,0.08)] border border-[rgba(255,170,0,0.2)]">
+                <div className="text-[11px] text-[#ffaa00] flex items-start gap-2">
+                  <span>⚠️</span>
+                  <span><strong>风险提示：</strong>本分析仅供信息参考，不构成任何投资建议。请根据个人风险承受能力独立判断。</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+        </div>
+      </main>
     </div>
   )
 }

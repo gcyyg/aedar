@@ -2,6 +2,7 @@ import axios from 'axios'
 import { cache, cacheKeys } from './cache.js'
 import { calculateScores, type StockData, type ScoreResult } from './scorer.js'
 import { generateStockSummary } from './aiSummary.js'
+import { getChinaStockBasic } from './chinaStocks.js'
 
 // API 配置
 const TUSHARE_TOKEN = '51fbaa947c34a4caa000e1323fa20153f93a34b1fea1f6b98196e59e'
@@ -11,8 +12,18 @@ const ALPHA_VANTAGE_KEY = 'G8IYR0VLFJNTZHDS'
 // 判断股票类型 (A股/港股/美股)
 export function getStockMarket(symbol: string): 'china' | 'hk' | 'us' {
   if (/^(sh|sz|688|002|003|600|601|603|000|001|002003)/i.test(symbol)) return 'china'
-  if (/^(hk|港|\\d{5})$/i.test(symbol)) return 'hk'
+  if (/^(hk|港|\d{5})$/i.test(symbol)) return 'hk'
   return 'us'
+}
+
+// 用户输入的代码 → TuShare ts_code 格式
+function toTsCode(symbol: string): string {
+  const s = symbol.toUpperCase().replace(/\.(SH|SZ|BJ)/i, '')
+  if (/^6\d{5}$/.test(s)) return `${s}.SH`   // 上交所
+  if (/^(000|001|002|003)\d{3}$/.test(s)) return `${s}.SZ`  // 深交所
+  if (/^688\d{3}$/.test(s)) return `${s}.SH`  // 科创板
+  if (/^430\d{3}$/.test(s)) return `${s}.BJ`  // 北交所
+  return `${s}.SH` // 默认上交所
 }
 
 // 获取股票基本信息
@@ -69,16 +80,22 @@ export async function getStockKLine(symbol: string, period: string = 'daily'): P
 // ===== A股数据源 =====
 
 async function fetchChinaStock(symbol: string): Promise<StockData['basic'] | null> {
+  // 优先使用本地缓存（无 API 调用）
+  const local = getChinaStockBasic(symbol)
+  if (local) return local
+
+  // 本地没有则查 TuShare（注意：stock_basic 限速 1次/小时）
   try {
+    const tsCode = toTsCode(symbol)
     const res = await axios.post('http://api.tushare.pro', {
       api_name: 'stock_basic',
       token: TUSHARE_TOKEN,
-      params: { ts_code: symbol, list_status: 'L' },
+      params: { ts_code: tsCode, list_status: 'L' },
       fields: 'ts_code,symbol,name,area,industry,market,list_date,enname,cnspell'
     })
-    
+
     if (res.data.code !== 0 || !res.data.data.items?.length) return null
-    
+
     const [ts_code, sym, name, area, industry, market] = res.data.data.items[0]
     return { symbol: sym, name, market, industry, area }
   } catch (e: any) {
@@ -89,10 +106,11 @@ async function fetchChinaStock(symbol: string): Promise<StockData['basic'] | nul
 
 async function fetchChinaPrice(symbol: string): Promise<StockData['price'] | null> {
   try {
+    const tsCode = toTsCode(symbol)
     const res = await axios.post('http://api.tushare.pro', {
       api_name: 'daily',
       token: TUSHARE_TOKEN,
-      params: { ts_code: symbol, start_date: getDateNDaysAgo(7), end_date: getTodayDate() },
+      params: { ts_code: tsCode, start_date: getDateNDaysAgo(7), end_date: getTodayDate() },
       fields: 'ts_code,trade_date,open,high,low,close,vol,amount'
     })
 
@@ -135,7 +153,7 @@ async function fetchChinaKLine(symbol: string, period: string): Promise<StockDat
     const res = await axios.post('http://api.tushare.pro', {
       api_name: apiMap[period] || 'daily',
       token: TUSHARE_TOKEN,
-      params: { ts_code: symbol, start_date: getDateNDaysAgo(365) },
+      params: { ts_code: toTsCode(symbol), start_date: getDateNDaysAgo(365) },
       fields: 'trade_date,open,high,low,close,vol'
     })
 
@@ -204,7 +222,12 @@ async function fetchUsPrice(symbol: string): Promise<StockData['price'] | null> 
       low: q.l,
       pe: metrics.peBasicExclExtraTTM || 0,
       pb: metrics.pbWeekly || 0,
+      ps: metrics.psRatioTTM || 0,
+      peg: metrics.pegTrailingTTM || 0,
       marketCap: metrics.marketCapitalizationAin || 0,
+      roe: metrics.roeBasicExclExtraTTMAnn || 0,
+      revenueGrowth: metrics.revenueGrowthTTM || 0,
+      profitGrowth: metrics.netIncomeGrowthTTM || 0,
       history: []
     }
   } catch (e: any) {
@@ -214,36 +237,74 @@ async function fetchUsPrice(symbol: string): Promise<StockData['price'] | null> 
 }
 
 async function fetchUsKLine(symbol: string, period: string): Promise<StockData['kline'] | null> {
+  // console.log(`[fetchUsKLine] calling AlphaVantage for ${symbol}`)
   try {
-    // 使用 Finnhub 的技术指标
-    const resolution = period === 'daily' ? 'D' : period === 'weekly' ? 'W' : 'M'
-    
-    const res = await axios.get(`https://finnhub.io/api/v1/stock/candle`, {
+    const res = await axios.get(`https://www.alphavantage.co/query`, {
       params: {
+        function: 'TIME_SERIES_DAILY',
         symbol,
-        resolution,
-        from: Math.floor(Date.now() / 1000 - 365 * 24 * 3600),
-        to: Math.floor(Date.now() / 1000),
-        token: FINNHUB_KEY
-      }
+        outputsize: 'compact',      // 免费版仅支持 compact（100条）
+        apikey: 'G8IYR0VLFJNTZHDS'
+      },
+      timeout: 8000
     })
 
-    if (res.data.s !== 'ok' || !res.data.t?.length) return null
+    const info = res.data['Information']
+    if (info) {
+      console.log(`AlphaVantage limit: ${info}`)
+      return null
+    }
 
-    const data = res.data.t.map((t: number, i: number) => ({
-      date: new Date(t * 1000).toISOString().split('T')[0],
-      open: res.data.o[i],
-      high: res.data.h[i],
-      low: res.data.l[i],
-      close: res.data.c[i],
-      volume: res.data.v[i]
-    }))
-
-    return { data, ma: calculateMA(data) }
+    const timeSeries = res.data['Time Series (Daily)']
+    if (timeSeries) {
+      const entries = Object.entries(timeSeries)
+      console.log(`AlphaV entries count: ${entries.length}`)
+      if (entries.length > 0) {
+        const data = entries.map(([date, vals]: [string, any]) => ({
+          date,
+          open: parseFloat(vals['1. open']),
+          high: parseFloat(vals['2. high']),
+          low: parseFloat(vals['3. low']),
+          close: parseFloat(vals['4. close']),
+          volume: parseInt(vals['5. volume'])
+        }))
+        // 按日期升序排列
+        data.sort((a, b) => a.date.localeCompare(b.date))
+        return { data, ma: calculateMA(data) }
+      }
+    }
   } catch (e: any) {
-    console.error('Finnhub candle error:', e.message)
-    return null
+    console.error('AlphaVantage kline error:', e.message)
   }
+
+  // ── 方案二：yfinance（无需API key）────────────────────────────
+  try {
+    const res = await axios.get(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`, {
+      params: { interval: '1d', range: '2y' },
+      timeout: 8000
+    })
+    const chart = res.data?.chart?.result?.[0]
+    if (chart) {
+      const timestamps = chart.timestamp as number[]
+      const quotes = chart.indicators?.quote?.[0]
+      const volumes = chart.indicators?.quote?.[0]?.volume || []
+      if (timestamps?.length) {
+        const data = timestamps.map((t: number, i: number) => ({
+          date: new Date(t * 1000).toISOString().split('T')[0],
+          open: quotes.open[i],
+          high: quotes.high[i],
+          low: quotes.low[i],
+          close: quotes.close[i],
+          volume: volumes[i] || 0
+        })).filter((d: any) => d.close != null)
+        return { data, ma: calculateMA(data) }
+      }
+    }
+  } catch (e: any) {
+    console.error('yfinance kline error:', e.message)
+  }
+
+  return null
 }
 
 // ===== 工具函数 =====

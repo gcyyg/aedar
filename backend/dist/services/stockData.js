@@ -2,6 +2,7 @@ import axios from 'axios';
 import { cache, cacheKeys } from './cache.js';
 import { calculateScores } from './scorer.js';
 import { generateStockSummary } from './aiSummary.js';
+import { getChinaStockBasic } from './chinaStocks.js';
 // API 配置
 const TUSHARE_TOKEN = '51fbaa947c34a4caa000e1323fa20153f93a34b1fea1f6b98196e59e';
 const FINNHUB_KEY = 'd8fo3d9r01qn443auhngd8fo3d9r01qn443auho0';
@@ -10,9 +11,22 @@ const ALPHA_VANTAGE_KEY = 'G8IYR0VLFJNTZHDS';
 export function getStockMarket(symbol) {
     if (/^(sh|sz|688|002|003|600|601|603|000|001|002003)/i.test(symbol))
         return 'china';
-    if (/^(hk|港|\\d{5})$/i.test(symbol))
+    if (/^(hk|港|\d{5})$/i.test(symbol))
         return 'hk';
     return 'us';
+}
+// 用户输入的代码 → TuShare ts_code 格式
+function toTsCode(symbol) {
+    const s = symbol.toUpperCase().replace(/\.(SH|SZ|BJ)/i, '');
+    if (/^6\d{5}$/.test(s))
+        return `${s}.SH`; // 上交所
+    if (/^(000|001|002|003)\d{3}$/.test(s))
+        return `${s}.SZ`; // 深交所
+    if (/^688\d{3}$/.test(s))
+        return `${s}.SH`; // 科创板
+    if (/^430\d{3}$/.test(s))
+        return `${s}.BJ`; // 北交所
+    return `${s}.SH`; // 默认上交所
 }
 // 获取股票基本信息
 export async function getStockBasic(symbol) {
@@ -61,11 +75,17 @@ export async function getStockKLine(symbol, period = 'daily') {
 }
 // ===== A股数据源 =====
 async function fetchChinaStock(symbol) {
+    // 优先使用本地缓存（无 API 调用）
+    const local = getChinaStockBasic(symbol);
+    if (local)
+        return local;
+    // 本地没有则查 TuShare（注意：stock_basic 限速 1次/小时）
     try {
+        const tsCode = toTsCode(symbol);
         const res = await axios.post('http://api.tushare.pro', {
             api_name: 'stock_basic',
             token: TUSHARE_TOKEN,
-            params: { ts_code: symbol, list_status: 'L' },
+            params: { ts_code: tsCode, list_status: 'L' },
             fields: 'ts_code,symbol,name,area,industry,market,list_date,enname,cnspell'
         });
         if (res.data.code !== 0 || !res.data.data.items?.length)
@@ -80,10 +100,11 @@ async function fetchChinaStock(symbol) {
 }
 async function fetchChinaPrice(symbol) {
     try {
+        const tsCode = toTsCode(symbol);
         const res = await axios.post('http://api.tushare.pro', {
             api_name: 'daily',
             token: TUSHARE_TOKEN,
-            params: { ts_code: symbol, start_date: getDateNDaysAgo(7), end_date: getTodayDate() },
+            params: { ts_code: tsCode, start_date: getDateNDaysAgo(7), end_date: getTodayDate() },
             fields: 'ts_code,trade_date,open,high,low,close,vol,amount'
         });
         if (res.data.code !== 0 || !res.data.data.items?.length)
@@ -122,7 +143,7 @@ async function fetchChinaKLine(symbol, period) {
         const res = await axios.post('http://api.tushare.pro', {
             api_name: apiMap[period] || 'daily',
             token: TUSHARE_TOKEN,
-            params: { ts_code: symbol, start_date: getDateNDaysAgo(365) },
+            params: { ts_code: toTsCode(symbol), start_date: getDateNDaysAgo(365) },
             fields: 'trade_date,open,high,low,close,vol'
         });
         if (res.data.code !== 0 || !res.data.data.items?.length)

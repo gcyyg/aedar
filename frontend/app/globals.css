@@ -37,7 +37,6 @@ body {
   font-family: 'Inter', sans-serif;
   background: var(--bg-base);
   color: var(--text-primary);
-  overflow-x: hidden;
   min-height: 100vh;
 }
 
@@ -257,8 +256,30 @@ input, select {
     rgba(255, 255, 255, 0.02) 75%
   );
   background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
+  animation: skeleton-shimmer 1.5s infinite;
   border-radius: 8px;
+}
+
+.skeleton-bar {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.03) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.03) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+
+.skeleton-name {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.03) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.03) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
 }
 
 /* ── Tooltip ── */
@@ -322,4 +343,34 @@ input, select {
 
 .search-input::placeholder {
   color: var(--text-muted);
+}
+
+/* ── Demo-style Card ── */
+.card-style {
+  background: rgba(20, 20, 35, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.card-style::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+}
+
+.card-style:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 40px rgba(0, 149, 255, 0.05);
+}
+
+/* ── Comprehensive Card (full-width) ── */
+.comprehensive-card {
+  background: linear-gradient(135deg, rgba(0, 149, 255, 0.06) 0%, rgba(0, 214, 143, 0.04) 100%);
+  border-color: rgba(0, 149, 255, 0.2);
 }
