@@ -1,0 +1,376 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg-base: #0a0a0f;
+  --bg-surface: rgba(15, 15, 25, 0.8);
+  --bg-card: rgba(20, 20, 35, 0.6);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-glow: rgba(0, 149, 255, 0.3);
+  --text-primary: #f0f0f5;
+  --text-secondary: rgba(240, 240, 245, 0.6);
+  --text-muted: rgba(240, 240, 245, 0.35);
+  --accent: #0095ff;
+  --accent-glow: rgba(0, 149, 255, 0.15);
+  --gain: #00d68f;
+  --gain-muted: rgba(0, 214, 143, 0.15);
+  --loss: #ff3d71;
+  --loss-muted: rgba(255, 61, 113, 0.15);
+  --warn: #ffaa00;
+  --diamond: #00d68f;
+  --gold: #ffd700;
+  --silver: #c0c0c0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  min-height: 100vh;
+}
+
+/* ── Custom Scrollbar ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 149, 255, 0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 149, 255, 0.5);
+}
+
+/* ── Gradient Background ── */
+.bg-gradient {
+  background: radial-gradient(ellipse at top, #0f1923 0%, #0a0a0f 50%);
+}
+
+.bg-mesh {
+  background: 
+    radial-gradient(at 40% 20%, rgba(0, 149, 255, 0.08) 0px, transparent 50%),
+    radial-gradient(at 80% 60%, rgba(0, 214, 143, 0.05) 0px, transparent 50%),
+    radial-gradient(at 10% 80%, rgba(255, 170, 0, 0.04) 0px, transparent 50%),
+    #0a0a0f;
+}
+
+/* ── Glass Card ── */
+.glass-card {
+  background: linear-gradient(
+    135deg,
+    rgba(20, 20, 35, 0.6) 0%,
+    rgba(15, 15, 25, 0.8) 100%
+  );
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card:hover {
+  border-color: var(--border-glow);
+  box-shadow: 
+    0 0 30px rgba(0, 149, 255, 0.15),
+    0 20px 40px rgba(0, 0, 0, 0.4);
+  transform: translateY(-2px);
+}
+
+/* ── Glow Effect ── */
+.glow-border {
+  position: relative;
+}
+
+.glow-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    135deg,
+    rgba(0, 149, 255, 0.5),
+    rgba(0, 214, 143, 0.3),
+    rgba(255, 170, 0, 0.2)
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.glow-border:hover::before {
+  opacity: 1;
+}
+
+/* ── Number Typography ── */
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── Grade Colors ── */
+.grade-S { color: var(--s-grade); text-shadow: 0 0 20px rgba(255, 107, 53, 0.5); }
+.grade-A { color: var(--a-grade); text-shadow: 0 0 20px rgba(255, 170, 0, 0.5); }
+.grade-B { color: var(--b-grade); text-shadow: 0 0 20px rgba(0, 214, 143, 0.5); }
+.grade-C { color: var(--c-grade); text-shadow: 0 0 20px rgba(107, 122, 255, 0.5); }
+
+.grade-diamond { color: var(--diamond); text-shadow: 0 0 30px rgba(0, 214, 143, 0.6); }
+.grade-gold { color: var(--gold); text-shadow: 0 0 30px rgba(255, 215, 0, 0.6); }
+.grade-silver { color: var(--silver); text-shadow: 0 0 20px rgba(192, 192, 192, 0.5); }
+
+/* ── Progress Bar ── */
+.progress-bar {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--gain));
+  transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Ambient Particles ── */
+.particle {
+  position: fixed;
+  width: 2px;
+  height: 2px;
+  background: rgba(0, 149, 255, 0.4);
+  border-radius: 50%;
+  pointer-events: none;
+  animation: float-particle 15s ease-in-out infinite;
+}
+
+@keyframes float-particle {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+    opacity: 0.3;
+  }
+  25% {
+    transform: translate(100px, -150px) scale(1.5);
+    opacity: 0.6;
+  }
+  50% {
+    transform: translate(-50px, -300px) scale(1);
+    opacity: 0.4;
+  }
+  75% {
+    transform: translate(150px, -200px) scale(1.2);
+    opacity: 0.5;
+  }
+}
+
+/* ── Shimmer Effect ── */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.05) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+}
+
+/* ── Score Badge ── */
+.score-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 18px;
+  font-family: 'JetBrains Mono', monospace;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* ── Chart Container ── */
+.chart-container {
+  background: rgba(10, 10, 15, 0.5);
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+}
+
+/* ── Input Styles ── */
+input, select {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── Ripple Effect ── */
+.ripple {
+  position: relative;
+  overflow: hidden;
+}
+
+.ripple::after {
+  content: '';
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  background-image: radial-gradient(circle, rgba(255,255,255,0.15) 10%, transparent 10%);
+  background-repeat: no-repeat;
+  background-position: 50%;
+  transform: scale(10);
+  opacity: 0;
+  transition: transform 0.5s, opacity 0.3s;
+}
+
+.ripple:active::after {
+  transform: scale(0);
+  opacity: 1;
+  transition: 0s;
+}
+
+/* ── Loading Skeleton ── */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.02) 25%,
+    rgba(255, 255, 255, 0.05) 50%,
+    rgba(255, 255, 255, 0.02) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+  border-radius: 8px;
+}
+
+.skeleton-bar {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.03) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.03) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+
+.skeleton-name {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.03) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.03) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+
+/* ── Tooltip ── */
+.tooltip {
+  position: relative;
+}
+
+.tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  padding: 6px 12px;
+  background: rgba(20, 20, 35, 0.95);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
+  backdrop-filter: blur(10px);
+}
+
+.tooltip:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-4px);
+}
+
+/* ── Responsive Grid ── */
+.grid-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+}
+
+@media (max-width: 768px) {
+  .grid-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Search Box ── */
+.search-input {
+  background: rgba(15, 15, 25, 0.8);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 20px 12px 48px;
+  font-size: 16px;
+  color: var(--text-primary);
+  transition: all 0.3s ease;
+  width: 100%;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 20px rgba(0, 149, 255, 0.2);
+}
+
+.search-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* ── Demo-style Card ── */
+.card-style {
+  background: rgba(20, 20, 35, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.card-style::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+}
+
+.card-style:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 40px rgba(0, 149, 255, 0.05);
+}
+
+/* ── Comprehensive Card (full-width) ── */
+.comprehensive-card {
+  background: linear-gradient(135deg, rgba(0, 149, 255, 0.06) 0%, rgba(0, 214, 143, 0.04) 100%);
+  border-color: rgba(0, 149, 255, 0.2);
+}

@@ -1,0 +1,5 @@
+{
+  "buildCommand": "",
+  "outputDirectory": ".next",
+  "installCommand": "echo skip"
+}

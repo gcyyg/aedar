@@ -1,0 +1,29 @@
+{
+  "name": "cedar-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev:china": "tsx watch src/server.ts",
+    "start:china": "node dist/server.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "@fastify/rate-limit": "^9.1.0",
+    "axios": "^1.17.0",
+    "cheerio": "^1.0.0",
+    "dotenv": "^17.4.2",
+    "fastify": "^4.28.1",
+    "node-cache": "^5.1.2",
+    "node-fetch": "^3.3.2",
+    "pinyin": "^4.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.41",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.3"
+  }
+}
