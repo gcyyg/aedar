@@ -7,7 +7,7 @@ import { chainRoutes } from './routes/chain.js'
 import { analysisRoutes } from './routes/analysis.js'
 import { cache } from './services/cache.js'
 
-const PORT = Number(process.env.PORT) || 3001
+const PORT = Number(process.env.PORT) || 3000
 
 const app = Fastify({
   logger: true

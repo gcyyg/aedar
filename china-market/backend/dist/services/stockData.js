@@ -681,63 +681,64 @@ export async function getStockData(symbol, forcedMarket) {
     const stockData = { basic, price, kline, risk: null };
     const scoreResult = calculateScores(stockData);
     // 补充同行对比数据
-    const peerData = await fetchPeerStockList(symbol, FINNHUB_KEY);
-    if (peerData.length > 0) {
-        // 补充同行 PE（东方财富）
+    let peerData = [];
+    const isChinaStock = /^(sh|sz|688|002|003|600|601|603|000|001)/i.test(symbol);
+    if (!isChinaStock) {
+        // 非A股：走 Finnhub
+        peerData = await fetchPeerStockList(symbol, FINNHUB_KEY);
+    }
+    if (peerData.length === 0) {
+        // 无数据 → 从 CHINA_STOCKS_MAP 找同行业股票作兜底
+        const basicInfo = CHINA_STOCKS_MAP[symbol.replace(/\D/g, '').slice(0, 6)];
+        if (basicInfo) {
+            peerData = Object.entries(CHINA_STOCKS_MAP)
+                .filter(([code, info]) => info.industry === basicInfo.industry && code !== symbol.replace(/\D/g, '').slice(0, 6))
+                .map(([code, info]) => ({
+                symbol: code,
+                name: info.name,
+                marketCap: 0, pe: 0, roe: 0, revenueGrowth: 0, profitGrowth: 0
+            }));
+        }
+        if (peerData.length > 0) {
+            // 从东方财富补充同行 PE
+            const peerCodes = peerData.map(p => {
+                const num = p.symbol.replace(/\D/g, '').slice(0, 6);
+                return /^(600|601|603|688)/.test(num) ? `1.${num}` : `0.${num}`;
+            });
+            const quoteRes = await axios.get('https://push2delay.eastmoney.com/api/qt/ulist.np/get', {
+                params: { secids: peerCodes.join(','), fields: 'f57,f58,f162' },
+                headers: { Referer: 'https://quote.eastmoney.com/' },
+                timeout: 10000
+            }).catch(() => ({ data: null }));
+            if (quoteRes.data?.data?.diff) {
+                for (let i = 0; i < peerData.length; i++) {
+                    const item = quoteRes.data.data.diff[i];
+                    if (item?.f57 > 0)
+                        peerData[i].pe = Math.round(item.f57 * 10) / 10;
+                }
+            }
+        }
+    }
+    else {
+        // Finnhub 有数据 → 从东方财富补充同行 PE
         const peerCodes = peerData.map(p => {
             const num = p.symbol.replace(/\D/g, '').slice(0, 6);
             return /^(600|601|603|688)/.test(num) ? `1.${num}` : `0.${num}`;
         });
         const quoteRes = await axios.get('https://push2delay.eastmoney.com/api/qt/ulist.np/get', {
-            params: {
-                secids: peerCodes.join(','),
-                fields: 'f57,f58,f162'
-            },
+            params: { secids: peerCodes.join(','), fields: 'f57,f58,f162' },
             headers: { Referer: 'https://quote.eastmoney.com/' },
             timeout: 10000
         }).catch(() => ({ data: null }));
         if (quoteRes.data?.data?.diff) {
             for (let i = 0; i < peerData.length; i++) {
                 const item = quoteRes.data.data.diff[i];
-                // f57 本身直接是 PE 值
                 if (item?.f57 > 0)
                     peerData[i].pe = Math.round(item.f57 * 10) / 10;
             }
         }
-        scoreResult.peerBenchmarks = peerData;
     }
-    else {
-        // Finnhub 无数据时，用本地 CHINA_STOCKS_MAP 同行股票兜底
-        const basicInfo = CHINA_STOCKS_MAP[symbol.replace(/\D/g, '').slice(0, 6)];
-        if (basicInfo) {
-            const peerList = [];
-            for (const [code, info] of Object.entries(CHINA_STOCKS_MAP)) {
-                if (info.industry === basicInfo.industry && code !== symbol.replace(/\D/g, '').slice(0, 6)) {
-                    peerList.push({ symbol: code, name: info.name, marketCap: 0, pe: 0, roe: 0, revenueGrowth: 0, profitGrowth: 0 });
-                }
-            }
-            if (peerList.length > 0) {
-                // 补充 PE（东方财富）
-                const peerCodes = peerList.map(p => {
-                    const num = p.symbol.replace(/\D/g, '').slice(0, 6);
-                    return /^(600|601|603|688)/.test(num) ? `1.${num}` : `0.${num}`;
-                });
-                const quoteRes = await axios.get('https://push2delay.eastmoney.com/api/qt/ulist.np/get', {
-                    params: { secids: peerCodes.join(','), fields: 'f57,f162' },
-                    headers: { Referer: 'https://quote.eastmoney.com/' },
-                    timeout: 10000
-                }).catch(() => ({ data: null }));
-                if (quoteRes.data?.data?.diff) {
-                    for (let i = 0; i < peerList.length; i++) {
-                        const item = quoteRes.data.data.diff[i];
-                        if (item?.f57 > 0)
-                            peerList[i].pe = Math.round(item.f57 * 10) / 10;
-                    }
-                }
-            }
-            scoreResult.peerBenchmarks = peerList.slice(0, 6);
-        }
-    }
+    scoreResult.peerBenchmarks = peerData.slice(0, 6);
     // 生成 AI 摘要 (异步，不阻塞返回)
     generateStockSummary(scoreResult.symbol, scoreResult.name, scoreResult.cedarScore, scoreResult.cedarLevel, scoreResult.trackScore, scoreResult.growthScore, scoreResult.valuationScore, scoreResult.riskScore, scoreResult.marketTemp, scoreResult.price, scoreResult.industry, scoreResult.industryTrack, scoreResult.maEvaluation, scoreResult.chinaUsMapping).then(summaries => {
         scoreResult.summary = summaries;

@@ -465,18 +465,12 @@ export default function Home() {
         }
       }
 
-      // 并行请求：基础信息 + 完整评分 + K线
-      const [basicRes, stockRes, klineRes] = await Promise.all([
-        fetch(`/api/stock/basic/${encodeURIComponent(symbol)}?market=china`, { signal: controller.signal }),
-        fetch(`/api/stock/${encodeURIComponent(symbol)}?market=china`, { signal: controller.signal }),
-        fetch(`/api/stock/kline/${encodeURIComponent(symbol)}?market=china`, { signal: controller.signal }),
+      // 并行请求：完整评分 + K线（基础信息已包含在完整评分返回中）
+      const [stockRes, klineRes] = await Promise.all([
+        fetch(`/api/stock/${encodeURIComponent(symbol)}`, { signal: controller.signal }),
+        fetch(`/api/stock/kline/${encodeURIComponent(symbol)}`, { signal: controller.signal }),
       ])
       clearTimeout(timeoutId)
-
-      const basicJson = await basicRes.json().catch(() => null)
-      if (basicRes.ok && basicJson) {
-        setBasicData(basicJson)
-      }
 
       const klineJson = await klineRes.json().catch(() => null)
       if (klineRes.ok && klineJson && klineJson.kline?.data?.length) {
@@ -489,6 +483,8 @@ export default function Home() {
       }
       const data = await stockRes.json()
       setStockData(data)
+      // 基础信息从完整评分数据中提取
+      setBasicData({ symbol: data.symbol, name: data.name, market: 'china' })
       setLastUpdated(new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
     } catch (e: any) {
       if (e.name === 'AbortError') {

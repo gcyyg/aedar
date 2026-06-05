@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 
-// china-market 后端地址
-const BACKEND_URL = 'http://localhost:3002'
+const CHINA_BACKEND_URL = process.env.CHINA_BACKEND_URL || 'http://localhost:3002'
 
 export async function GET(
   request: Request,
@@ -9,8 +8,7 @@ export async function GET(
 ) {
   const symbol = params.symbol
   try {
-    const res = await fetch(`${BACKEND_URL}/api/stock/${encodeURIComponent(symbol)}`, {
-      // @ts-ignore
+    const res = await fetch(`${CHINA_BACKEND_URL}/api/stock/kline/${encodeURIComponent(symbol)}`, {
       next: { revalidate: 300 }
     })
     const data = await res.json()

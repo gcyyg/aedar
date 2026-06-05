@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useRouter, usePathname } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Search, TrendingUp, TrendingDown, AlertTriangle,
@@ -418,7 +419,14 @@ function StockChart({ kline }: { kline: { data: { date: string; open: number; hi
 
 // ── Main Page ──────────────────────────────────────────
 export default function Home() {
+  const router = useRouter()
+  const pathname = usePathname()
   const [market, setMarket] = useState<'us' | 'cn'>('us')
+  // 根据URL路径同步市场状态
+  useEffect(() => {
+    if (pathname === '/cn') setMarket('cn')
+    else setMarket('us')
+  }, [pathname])
   const [query, setQuery] = useState('')
   const [stockData, setStockData] = useState<StockData | null>(null)
   const [recentSearches, setRecentSearches] = useState<string[]>(() => {
@@ -546,6 +554,16 @@ export default function Home() {
   }
 
   const handleMarketSwitch = (newMarket: 'us' | 'cn') => {
+    // 切换市场时通过URL路径跳转，避免刷新页面
+    if (newMarket === 'cn') {
+      router.push('/cn')
+      return
+    }
+    // 美股市场：从/cn路径切回根路径
+    if (pathname === '/cn') {
+      router.push('/')
+      return
+    }
     setMarket(newMarket)
     setQuery('')
     setStockData(null)

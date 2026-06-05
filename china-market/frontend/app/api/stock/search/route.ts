@@ -1,29 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-// DEBUG: 直接代理到后端并返回调试信息
 export async function GET(request: NextRequest) {
-  const rawUrl: string = request.url
-  let q = ''
-  try {
-    const m = rawUrl.match(/[?&]q=([^&]+)/)
-    q = m ? decodeURIComponent(m[1]) : ''
-  } catch {
-    q = ''
+  const url = new URL(request.url)
+  const q = url.searchParams.get('q') || ''
+
+  if (!q.trim()) {
+    return NextResponse.json({ results: [] })
   }
 
-  // 代理到后端
   try {
     const proxiedUrl = `http://localhost:3002/api/stock/search?q=${encodeURIComponent(q)}`
-    const res = await fetch(proxiedUrl)
+    const res = await fetch(proxiedUrl, { next: { revalidate: 60 } })
+    if (!res.ok) throw new Error(`Backend ${res.status}`)
     const data = await res.json()
-    return NextResponse.json({
-      type: 'proxy_debug',
-      frontend_q: q,
-      frontend_q_bytes: [...q].map(c => c.charCodeAt(0)),
-      proxied_url: proxiedUrl,
-      backend_response: data,
-    })
+    return NextResponse.json(data)
   } catch (err) {
-    return NextResponse.json({ error: String(err) })
+    return NextResponse.json({ error: String(err) }, { status: 502 })
   }
 }

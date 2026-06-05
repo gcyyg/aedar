@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import ErrorBoundary from '@/components/ErrorBoundary'
 
 export const metadata: Metadata = {
   title: 'CEDAR AI - 智能投资决策系统',
@@ -14,7 +15,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" className="dark">
       <body className="bg-mesh min-h-screen antialiased">
-        {children}
+        <ErrorBoundary>{children}</ErrorBoundary>
       </body>
     </html>
   )

@@ -21,11 +21,19 @@ export async function stockRoutes(app) {
             if (!res.ok)
                 return { results: [] };
             const data = await res.json();
-            const results = (data.result || []).slice(0, 8).map((item) => ({
-                symbol: item.symbol,
-                name: item.description,
-                market: item.type || item.exchange || ''
-            }));
+            const market = req.query.market || 'us';
+            const results = (data.result || []).slice(0, 8).map((item) => {
+                let symbol = item.symbol;
+                // 去掉美股API返回的A股后缀(.SS/.SZ等)
+                if (market === 'china') {
+                    symbol = symbol.replace(/\.(SH|SZ|BJ|SS)$/i, '');
+                }
+                return {
+                    symbol,
+                    name: item.description,
+                    market: item.type || item.exchange || ''
+                };
+            });
             return { results };
         }
         catch {
