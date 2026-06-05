@@ -19,22 +19,16 @@ async function emSearch(symbol) {
 export async function stockRoutes(app) {
     // 搜索
     app.get('/search', async (req, reply) => {
-        const rawUrl = req.raw.url;
-        let decodedQ = '';
-        try {
-            const m = rawUrl.match(/[?&]q=([^&]+)/);
-            decodedQ = m ? decodeURIComponent(m[1]) : '';
-        }
-        catch {
-            decodedQ = '';
-        }
-        console.log('[search] rawUrl:', rawUrl);
-        console.log('[search] decodedQ:', decodedQ);
-        if (!decodedQ.trim()) {
+        // 直接从 URL 字符串解析查询参数，避免 Fastify query 解析中文问题
+        const urlStr = req.raw?.url || req.url;
+        const queryString = urlStr.split('?')[1] || '';
+        const params = new URLSearchParams(queryString);
+        const q = params.get('q') || '';
+        if (!q.trim()) {
             return reply.status(400).send({ error: '搜索词不能为空' });
         }
         try {
-            const apiUrl = `${EM_SEARCH_API}?input=${encodeURIComponent(decodedQ)}&type=14&token=${EM_TOKEN}&count=10`;
+            const apiUrl = `${EM_SEARCH_API}?input=${encodeURIComponent(q)}&type=14&token=${EM_TOKEN}&count=10`;
             console.log('[search] apiUrl:', apiUrl);
             const apiRes = await axios.get(apiUrl, {
                 headers: {
@@ -52,11 +46,11 @@ export async function stockRoutes(app) {
                 name: h.Name || h.SecurityName || '',
                 market: h.SecurityType === '1' ? '沪A' : '深A',
             }));
-            return { query: decodedQ, results };
+            return { query: q, results };
         }
         catch (err) {
             console.error('[search] eastmoney failed:', err);
-            return { query: decodedQ, results: [] };
+            return { query: q, results: [] };
         }
     });
     // 股票完整评分

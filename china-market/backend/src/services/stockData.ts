@@ -15,7 +15,7 @@ export function getStockMarket(symbol: string, forced?: 'us' | 'china'): 'china'
   if (forced === 'china') return 'china'
   const s = symbol.toUpperCase()
   if (/^(SH|SZ|BJ)\./i.test(symbol)) return 'china'
-  if (/^(sh|sz|688|002|003|600|601|603|000|001|002003)/i.test(s)) return 'china'
+  if (/^(sh|sz|688|002|003|300|600|601|603|000|001|002003)/i.test(s)) return 'china'
   if (/^(HK|港|\d{5})$/i.test(s)) return 'hk'
   // 拼音缩写或全拼也在A股本地库中 → 判定为A股
   if (getChinaStockBasic(s)) return 'china'
@@ -29,6 +29,7 @@ function toTsCode(symbol: string): string {
   if (/^(000|001|002|003)\d{3}$/.test(s)) return `${s}.SZ`  // 深交所
   if (/^688\d{3}$/.test(s)) return `${s}.SH`  // 科创板
   if (/^430\d{3}$/.test(s)) return `${s}.BJ`  // 北交所
+  if (/^300\d{3}$/.test(s)) return `${s}.SZ`  // 创业板(3开头)
   return `${s}.SH` // 默认上交所
 }
 
@@ -229,14 +230,44 @@ async function fetchChinaStock(symbol: string): Promise<StockData['basic'] | nul
       fields: 'ts_code,symbol,name,area,industry,market,list_date,enname,cnspell'
     })
 
-    if (res.data.code !== 0 || !res.data.data.items?.length) return null
-
-    const [ts_code, sym, name, area, industry, market] = res.data.data.items[0]
-    return { symbol: sym, name, market, industry, area }
+    if (res.data.code !== 0 || !res.data.data.items?.length) {
+      // TuShare 无数据，继续往下走 EM 兜底
+    } else {
+      const [ts_code, sym, name, area, industry, market] = res.data.data.items[0]
+      return { symbol: sym, name, market, industry, area }
+    }
   } catch (e: any) {
     console.error('TuShare stock_basic error:', e.message)
-    return null
+    // TuShare 异常也继续走 EM 兜底
   }
+
+  // ── TuShare 限速/无数据兜底：从东方财富获取基础信息 ──
+  try {
+    const emCode = symbol.replace(/\D/g, '').slice(0, 6)
+    const isShanghai = /^(600|601|603|688)/.test(emCode)
+    const secid = isShanghai ? `1.${emCode}` : `0.${emCode}`
+    const quoteRes = await axios.get('https://push2delay.eastmoney.com/api/qt/stock/get', {
+      params: { secid, fields: 'f57,f58' },
+      headers: { Referer: 'https://quote.eastmoney.com/' },
+      timeout: 10000
+    })
+    const emData = quoteRes.data?.data
+    if (emData) {
+      console.log('[EM fallback basic] success:', emData.f57, emData.f58)
+      return {
+        symbol: emData.f57 || symbol,
+        name: emData.f58 || symbol,
+        market: isShanghai ? '沪A' : '深A',
+        industry: '未知行业',
+        area: '未知地区',
+      }
+    }
+    console.log('[EM fallback basic] no data returned')
+  } catch (e2: any) {
+    console.error('EM fallback basic error:', e2.message)
+  }
+
+  return null
 }
 
 async function fetchChinaPrice(symbol: string): Promise<StockData['price'] | null> {
@@ -253,7 +284,12 @@ async function fetchChinaPrice(symbol: string): Promise<StockData['price'] | nul
       fetchChinaFundamentals(symbol)
     ])
 
-    if (dailyRes.data.code !== 0 || !dailyRes.data.data.items?.length) return null
+    if (dailyRes.data.code !== 0 || !dailyRes.data.data.items?.length) {
+      // TuShare daily 无数据 → 从东方财富兜底
+      const emPrice = await fetchEMPrice(symbol)
+      if (emPrice) return { ...emPrice, history: [] }
+      return null
+    }
 
     const items = dailyRes.data.data.items.map(([ts_code, trade_date, open, high, low, close, vol, amount]: [string, string, number, number, number, number, number, number]) => ({
       date: trade_date,
@@ -282,6 +318,45 @@ async function fetchChinaPrice(symbol: string): Promise<StockData['price'] | nul
     }
   } catch (e: any) {
     console.error('TuShare daily error:', e.message)
+    // 异常也尝试 EM 兜底
+    const emPrice = await fetchEMPrice(symbol)
+    if (emPrice) return { ...emPrice, history: [] }
+    return null
+  }
+}
+
+// ── 东方财富实时行情兜底（用于 TuShare 限速/无数据时）────────────────────
+async function fetchEMPrice(symbol: string): Promise<StockData['price'] | null> {
+  const code = symbol.replace(/\D/g, '').slice(0, 6)
+  const isShanghai = /^(600|601|603|688)/.test(code)
+  const secid = isShanghai ? `1.${code}` : `0.${code}`
+  try {
+    const res = await axios.get('https://push2delay.eastmoney.com/api/qt/stock/get', {
+      params: { secid, fields: 'f43,f44,f45,f46,f47,f48,f57,f58,f169,f170,f116,f162,f163' },
+      headers: { Referer: 'https://quote.eastmoney.com/' },
+      timeout: 10000
+    })
+    const q = res.data?.data
+    if (!q) return null
+    return {
+      current: (q.f43 || 0) / 100,
+      change: (q.f44 || 0) / 100,
+      changePercent: (q.f170 || 0) / 100,
+      volume: (q.f47 || 0),
+      high: (q.f45 || 0) / 100,
+      low: (q.f46 || 0) / 100,
+      pe: (q.f162 || 0) / 100,
+      pb: (q.f163 || 0) / 100,
+      ps: 0,
+      peg: 0,
+      marketCap: (q.f116 || 0) / 1e8,
+      roe: 0,
+      revenueGrowth: 0,
+      profitGrowth: 0,
+      history: [], // 避免 scorer 崩溃
+    }
+  } catch (e: any) {
+    console.error('EM price fallback error:', e.message)
     return null
   }
 }
@@ -455,18 +530,60 @@ async function fetchChinaKLine(symbol: string, period: string): Promise<StockDat
       fields: 'trade_date,open,high,low,close,vol'
     })
 
-    if (res.data.code !== 0 || !res.data.data.items?.length) return null
+    if (res.data.code === 0 && res.data.data.items?.length) {
+      const data = res.data.data.items.map(([date, open, high, low, close, vol]: [string, number, number, number, number, number]) => ({
+        date, open, high, low, close, volume: vol
+      })).reverse()
 
-    const data = res.data.data.items.map(([date, open, high, low, close, vol]: [string, number, number, number, number, number]) => ({
-      date, open, high, low, close, volume: vol
-    })).reverse()
-
-    return {
-      data,
-      ma: calculateMA(data)
+      return {
+        data,
+        ma: calculateMA(data)
+      }
     }
+    // TuShare 无数据 → 东方财富 K 线兜底
+    return await fetchEMKLine(symbol)
   } catch (e: any) {
     console.error('TuShare kline error:', e.message)
+    return await fetchEMKLine(symbol)
+  }
+}
+
+// ── 东方财富 K 线兜底 ─────────────────────────────────────────────
+async function fetchEMKLine(symbol: string): Promise<StockData['kline'] | null> {
+  const code = symbol.replace(/\D/g, '').slice(0, 6)
+  const isShanghai = /^(600|601|603|688)/.test(code)
+  const secid = isShanghai ? `1.${code}` : `0.${code}`
+  try {
+    const res = await axios.get('https://push2delay.eastmoney.com/api/qt/stock/kline/get', {
+      params: {
+        secid,
+        fields1: 'f1,f2,f3,f4,f5,f6',
+        fields2: 'f51,f52,f53,f54,f55,f56,f57,f58',
+        klt: 101,  // 日线
+        fqt: 1,    // 前复权
+        beg: getDateNDaysAgo(365),
+        end: getTodayDate(),
+        lmt: 250
+      },
+      headers: { Referer: 'https://quote.eastmoney.com/' },
+      timeout: 10000
+    })
+    const klines: string[] = res.data?.data?.klines || []
+    if (!klines.length) return null
+    const data = klines.map(l => {
+      const [date, open, close, high, low, vol] = l.split(',')
+      return {
+        date: date.replace(/-/g, ''),
+        open: parseFloat(open),
+        close: parseFloat(close),
+        high: parseFloat(high),
+        low: parseFloat(low),
+        volume: parseFloat(vol)
+      }
+    })
+    return { data, ma: calculateMA(data) }
+  } catch (e: any) {
+    console.error('EM kline fallback error:', e.message)
     return null
   }
 }

@@ -1,7 +1,14 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // API routes are handled by app/api/stock/*/route.ts files
-  // No rewrites needed - route.ts handles market routing
+  async rewrites() {
+    return [
+      // A股后端（3002）直接代理，不经过 US 后端
+      {
+        source: '/cn/api/:path*',
+        destination: 'http://localhost:3002/api/:path*',
+      },
+    ]
+  },
 }
 
 module.exports = nextConfig

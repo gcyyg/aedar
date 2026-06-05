@@ -51,7 +51,7 @@ export default function ChainMap({ symbol }: { symbol: string }) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 20000)
     
-    fetch(`/api/chain/${symbol}/chain`, { signal: controller.signal })
+    fetch(`/cn/api/chain/${symbol}/chain`, { signal: controller.signal })
       .then(r => {
         clearTimeout(timeout)
         if (!r.ok) throw new Error('获取产业链数据失败')

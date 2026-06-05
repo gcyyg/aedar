@@ -1,8 +1,10 @@
 import { FastifyInstance } from 'fastify'
+import axios from 'axios'
 import { getStockData, getStockBasic, getStockKLine } from '../services/stockData.js'
 import { cache } from '../services/cache.js'
 
-// 前端发 cn，后端用 china
+const CHINA_BACKEND = process.env.CHINA_BACKEND_URL || 'http://localhost:3002'
+
 function normalizeMarket(m?: string): 'us' | 'china' | undefined {
   if (m === 'cn') return 'china'
   return m as 'us' | 'china' | undefined
@@ -10,12 +12,34 @@ function normalizeMarket(m?: string): 'us' | 'china' | undefined {
 
 export async function stockRoutes(app: FastifyInstance) {
 
-  // 搜索股票
-  app.get<{ Querystring: { q?: string; market?: string } }>('/search', async (req, reply) => {
-    const q = req.query.q?.trim() || ''
+  // 搜索股票：A股 → 代理到 A股后端（3002），美股 → Finnhub
+  app.get('/search', async (req, reply) => {
+    // 直接从 raw URL 解析避免 Fastify query 解析中文问题
+    const rawUrl = (req as any).raw?.url || req.url
+    const queryPart = rawUrl.includes('?') ? rawUrl.split('?')[1] : ''
+    const decoded = decodeURIComponent(queryPart)
+    const p = new URLSearchParams(decoded)
+    const q = (p.get('q') || '').trim()
+    const market = p.get('market') || 'us'
+
     if (!q) return { results: [] }
-    
-    // 从 Finnhub 获取美股搜索结果
+
+    // A股搜索 → 代理到 A股后端
+    if (market === 'china' || market === 'cn') {
+      try {
+        console.log('[china search] q:', q)
+        const res = await axios.get(`${CHINA_BACKEND}/api/stock/search?q=${encodeURIComponent(q)}`, {
+          headers: { 'User-Agent': 'CEDAR/1.0' },
+          timeout: 10000
+        })
+        return { query: q, results: res.data.results || [] }
+      } catch (e: any) {
+        console.error('[search] china proxy failed:', e.message)
+        return { query: q, results: [] }
+      }
+    }
+
+    // 美股搜索 → Finnhub
     try {
       const apiKey = process.env.FINNHUB_API_KEY
       if (!apiKey) return { results: [] }
@@ -24,19 +48,11 @@ export async function stockRoutes(app: FastifyInstance) {
       if (!res.ok) return { results: [] }
       
       const data = await res.json()
-      const market = req.query.market || 'us'
-      const results = (data.result || []).slice(0, 8).map((item: any) => {
-        let symbol = item.symbol
-        // 去掉美股API返回的A股后缀(.SS/.SZ等)
-        if (market === 'china') {
-          symbol = symbol.replace(/\.(SH|SZ|BJ|SS)$/i, '')
-        }
-        return {
-          symbol,
-          name: item.description,
-          market: item.type || item.exchange || ''
-        }
-      })
+      const results = (data.result || []).slice(0, 8).map((item: any) => ({
+        symbol: item.symbol,
+        name: item.description,
+        market: item.type || item.exchange || ''
+      }))
       
       return { results }
     } catch {
@@ -64,6 +80,22 @@ export async function stockRoutes(app: FastifyInstance) {
     const { symbol } = req.params
     const upperSymbol = symbol.toUpperCase()
     const market = normalizeMarket(req.query.market)
+
+    // A股股票 → 代理到 A股后端（3002）
+    if (market === 'china') {
+      try {
+        const urlStr = (req as any).raw?.url || req.url
+        const proxyPath = urlStr.replace(/^\/api\/stock/, '/api/stock')
+        const res = await axios.get(`${CHINA_BACKEND}${proxyPath}`, {
+          headers: { 'User-Agent': 'CEDAR/1.0' },
+          timeout: 30000
+        })
+        return res.data
+      } catch (e: any) {
+        console.error('[stock] china proxy failed:', e.message)
+        return reply.status(404).send({ error: '股票代码不存在或数据获取失败', symbol: upperSymbol })
+      }
+    }
 
     try {
       // getStockData 内部处理缓存 + AI 摘要生成
