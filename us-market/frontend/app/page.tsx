@@ -312,7 +312,7 @@ function StockChart({ kline }: { kline: { data: { date: string; open: number; hi
     let mounted = true
 
     const init = async () => {
-      const { createChart, ColorType, CrosshairMode } = await import('lightweight-charts') as any
+      const { createChart, ColorType, CrosshairMode, CandlestickSeries, LineSeries, HistogramSeries } = await import('lightweight-charts') as any
       if (!mounted || !containerRef.current) return
 
       chart = new createChart(containerRef.current, {
@@ -342,13 +342,13 @@ function StockChart({ kline }: { kline: { data: { date: string; open: number; hi
 
       // 主图：K线
       const cdata = kline.data.map(d => ({
-        time: d.date.replace(/-/g, '') as any,
+        time: d.date as any,
         open: d.open,
         high: d.high,
         low: d.low,
         close: d.close,
       }))
-      const candleSeries = chart.addCandlestickSeries({
+      const candleSeries = chart.addSeries(CandlestickSeries, {
         upColor: '#00d68f',
         downColor: '#ff3d71',
         borderUpColor: '#00d68f',
@@ -360,34 +360,34 @@ function StockChart({ kline }: { kline: { data: { date: string; open: number; hi
 
       // MA30
       const ma30Data = kline.data.map((d, i) => ({
-        time: d.date.replace(/-/g, '') as any,
+        time: d.date as any,
         value: kline.ma.ma30?.[i] ?? d.close,
       })).filter(d => d.value != null)
-      chart.addLineSeries({ color: '#ff6b35', lineWidth: 1, title: 'MA30' }).setData(ma30Data)
+      chart.addSeries(LineSeries, { color: '#ff6b35', lineWidth: 1, title: 'MA30' }).setData(ma30Data)
 
       // MA60
       const ma60Data = kline.data.map((d, i) => ({
-        time: d.date.replace(/-/g, '') as any,
+        time: d.date as any,
         value: kline.ma.ma60?.[i] ?? d.close,
       })).filter(d => d.value != null)
-      chart.addLineSeries({ color: '#0095ff', lineWidth: 1, title: 'MA60' }).setData(ma60Data)
+      chart.addSeries(LineSeries, { color: '#0095ff', lineWidth: 1, title: 'MA60' }).setData(ma60Data)
 
       // MA120
       const ma120Data = kline.data.map((d, i) => ({
-        time: d.date.replace(/-/g, '') as any,
+        time: d.date as any,
         value: kline.ma.ma120?.[i] ?? d.close,
       })).filter(d => d.value != null)
-      chart.addLineSeries({ color: '#ffaa00', lineWidth: 1, title: 'MA120' }).setData(ma120Data)
+      chart.addSeries(LineSeries, { color: '#ffaa00', lineWidth: 1, title: 'MA120' }).setData(ma120Data)
 
       // 成交量
-      const volSeries = chart.addHistogramSeries({
+      const volSeries = chart.addSeries(HistogramSeries, {
         color: 'rgba(0,149,255,0.3)',
         priceFormat: { type: 'volume' },
         priceScaleId: '',
       })
       volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } })
       volSeries.setData(kline.data.map(d => ({
-        time: d.date.replace(/-/g, '') as any,
+        time: d.date as any,
         value: d.volume ?? 0,
         color: d.close >= d.open ? 'rgba(0,214,143,0.4)' : 'rgba(255,61,113,0.4)',
       })))
@@ -429,12 +429,11 @@ export default function Home() {
   }, [pathname])
   const [query, setQuery] = useState('')
   const [stockData, setStockData] = useState<StockData | null>(null)
-  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
-    if (typeof window !== 'undefined') {
-      try { return JSON.parse(localStorage.getItem('cedar_recent_us') || '[]') } catch { return [] }
-    }
-    return []
-  })
+  const [recentSearches, setRecentSearches] = useState<string[]>([])
+  // Load from localStorage only on client
+  useEffect(() => {
+    try { setRecentSearches(JSON.parse(localStorage.getItem('cedar_recent_us') || '[]')) } catch {}
+  }, [])
   const [basicData, setBasicData] = useState<{symbol:string; basic:{symbol:string; name:string; market:string; industry:string; area:string}}| null>(null)
   const [klineData, setKlineData] = useState<{symbol:string; kline:{data:{date:string;open:number;high:number;low:number;close:number;volume:number}[];ma:Record<string,number[]>}}| null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -443,6 +442,101 @@ export default function Home() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [showDropdown, setShowDropdown] = useState(false)
   const searchTimerRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Dual timezone analog clocks
+  const [etTime, setEtTime] = useState('00:00:00')
+  const [ctTime, setCtTime] = useState('00:00:00')
+  useEffect(() => {
+    const update = () => {
+      const now = new Date()
+      setEtTime(now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'America/New_York' }))
+      setCtTime(now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Shanghai' }))
+    }
+    update()
+    const id = setInterval(update, 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  const parseTime = (t: string) => {
+    const [h, m, s] = t.split(':').map(Number)
+    return { h: h || 0, m: m || 0, s: s || 0 }
+  }
+  const toHandAngle = (h: number, m: number, s: number) => {
+    const hourAngle = ((h % 12) * 30 + m * 0.5 + s * (0.5 / 60))
+    const minuteAngle = m * 6 + s * 0.1
+    return { hourAngle, minuteAngle }
+  }
+
+  const ClockFace = ({ time, label, accent }: { time: string; label: string; accent: string }) => {
+    const { h, m, s } = parseTime(time)
+    const { hourAngle, minuteAngle } = toHandAngle(h, m, s)
+    return (
+      <div className="flex flex-col items-center gap-1" suppressHydrationWarning>
+        <svg width="48" height="48" viewBox="0 0 48 48" style={{ filter: `drop-shadow(0 0 6px ${accent}40)` }}>
+          {/* Glass face background */}
+          <circle cx="24" cy="24" r="22" fill="rgba(10,15,25,0.9)" stroke={accent} strokeWidth="1.5" strokeOpacity="0.6"/>
+          {/* Outer accent glow ring */}
+          <circle cx="24" cy="24" r="21" fill="none" stroke={accent} strokeWidth="0.5" strokeOpacity="0.4"/>
+          {/* Inner subtle ring */}
+          <circle cx="24" cy="24" r="18" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="0.5"/>
+          {/* Tick marks - enhanced visibility */}
+          {[0,1,2,3,4,5,6,7,8,9,10,11].map(i => {
+            const a = i * 30 - 90
+            const r1 = i % 3 === 0 ? 15 : 16.5
+            const isMain = i % 3 === 0
+            return <line key={i} 
+              x1={24 + r1*Math.cos(a*Math.PI/180)} 
+              y1={24 + r1*Math.sin(a*Math.PI/180)} 
+              x2={24 + 17.5*Math.cos(a*Math.PI/180)} 
+              y2={24 + 17.5*Math.sin(a*Math.PI/180)} 
+              stroke={isMain ? accent : "rgba(255,255,255,0.4)"} 
+              strokeWidth={isMain ? 2 : 1}
+              strokeLinecap="round"
+            />
+          })}
+          {/* Center hub - large and prominent */}
+          <circle cx="24" cy="24" r="3" fill={accent} opacity="0.9"/>
+          <circle cx="24" cy="24" r="1.5" fill="rgba(255,255,255,0.8)"/>
+          {/* Hour hand - thick and bold */}
+          <line x1={24} y1={24} 
+            x2={24 + 10*Math.sin(hourAngle*Math.PI/180)} 
+            y2={24 - 10*Math.cos(hourAngle*Math.PI/180)} 
+            stroke={accent} strokeWidth="3" strokeLinecap="round"
+            style={{ filter: `drop-shadow(0 0 3px ${accent})` }}
+          />
+          {/* Minute hand - clear visibility */}
+          <line x1={24} y1={24} 
+            x2={24 + 14*Math.sin(minuteAngle*Math.PI/180)} 
+            y2={24 - 14*Math.cos(minuteAngle*Math.PI/180)} 
+            stroke="rgba(255,255,255,0.85)" strokeWidth="2" strokeLinecap="round"
+            style={{ filter: 'drop-shadow(0 0 2px rgba(255,255,255,0.5))' }}
+          />
+          {/* Second hand - accent colored, thin but bright */}
+          <line x1={24} y1={24} 
+            x2={24 + 15*Math.sin((s*6)*Math.PI/180)} 
+            y2={24 - 15*Math.cos((s*6)*Math.PI/180)} 
+            stroke={accent} strokeWidth="1" strokeLinecap="round"
+            style={{ filter: `drop-shadow(0 0 4px ${accent})` }}
+          />
+          {/* Second hand tail */}
+          <line x1={24} y1={24} 
+            x2={24 - 4*Math.sin((s*6)*Math.PI/180)} 
+            y2={24 + 4*Math.cos((s*6)*Math.PI/180)} 
+            stroke={accent} strokeWidth="1" strokeLinecap="round" opacity="0.5"
+          />
+          {/* Second hand tip dot */}
+          <circle 
+            cx={24 + 15*Math.sin((s*6)*Math.PI/180)} 
+            cy={24 - 15*Math.cos((s*6)*Math.PI/180)} 
+            r="1.2" fill={accent}
+            style={{ filter: `drop-shadow(0 0 3px ${accent})` }}
+          />
+        </svg>
+        <span className="text-[10px] text-white/50 font-medium tracking-widest" suppressHydrationWarning>{label}</span>
+        <span className="text-[12px] text-white/80 font-mono font-semibold" suppressHydrationWarning>{time.substring(0,5)}</span>
+      </div>
+    )
+  }
 
   // Derive theme values
   const themeColor = market === 'us' ? '#0095ff' : '#ff3d71'
@@ -591,7 +685,7 @@ export default function Home() {
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#0095ff] to-[#00d68f] flex items-center justify-center text-base font-bold">🌲</div>
             <div>
               <div className="text-[15px] font-semibold tracking-wide">CEDAR<span className="text-white/30 font-light">AI</span></div>
-              <div className="text-[10px] text-white/30 tracking-widest uppercase">投资决策系统</div>
+              <div className="text-[10px] text-white/30 tracking-widest uppercase">杉树AI投资决策系统</div>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -599,11 +693,11 @@ export default function Home() {
               <span className="w-1.5 h-1.5 rounded-full bg-[#00d68f] animate-pulse" />
               LIVE
             </div>
-            {lastUpdated && (
-              <span className="text-[11px] text-white/30 font-mono">
-                更新 {lastUpdated}
-              </span>
-            )}
+            <div className="flex items-center gap-4">
+                <ClockFace time={etTime} label="纽交所" accent="#0095ff"/>
+                <div className="w-px h-8 bg-white/10"/>
+                <ClockFace time={ctTime} label="北京时间" accent="#ff3d71"/>
+              </div>
           </div>
         </div>
       </header>
@@ -611,12 +705,7 @@ export default function Home() {
       {/* ── Main ── */}
       <main className="w-full px-4 sm:px-8 py-8 sm:py-10">
         {/* Search */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-          className="mb-10"
-        >
+        <div className="mb-10">
           <div className="max-w-lg mx-auto text-center">
             {/* Market Selector */}
             {/* Market Selector */}
@@ -646,9 +735,8 @@ export default function Home() {
             <label className="text-[11px] text-white/30 tracking-widest uppercase block mb-3">
               {market === 'us' ? '输入美股代码 (如 AAPL, NVDA, TSLA)' : '输入A股代码 (如 600519, 000858, 688981)'}
             </label>
-            <div className={`flex bg-[rgba(15,15,25,0.8)] border border-white/[0.08] rounded-xl overflow-hidden transition-all focus-within:border-[${themeColor}] focus-within:shadow-[0_0_0_3px_rgba(0,0,0,0.1)]`}>
-              <div className="flex items-center px-4 font-medium border-r border-white/[0.08]"
-                style={{ color: themeColor, background: `${themeColor}0d` }}>
+            <div className={`flex bg-[rgba(15,15,25,0.8)] border border-[rgba(0,149,255,0.2)] rounded-xl overflow-hidden focus-within:border-[#0095ff] focus-within:shadow-[0_0_0_3px_rgba(0,149,255,0.1)] transition-all`}>
+              <div className="flex items-center px-4 text-[#0095ff] font-medium border-r border-white/[0.08] bg-[rgba(0,149,255,0.05)]">
                 <span className="text-base">{symbolPrefix}</span>
               </div>
               <input
@@ -665,29 +753,23 @@ export default function Home() {
                 placeholder={market === 'us' ? usPlaceholder : cnPlaceholder}
                 className="flex-1 bg-transparent px-5 py-4 text-[18px] font-mono font-medium text-white outline-none placeholder:text-white/30 placeholder:font-normal"
               />
-              <AnimatePresence mode="wait">
-                {isLoading ? (
-                  <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                    className="flex items-center px-5 text-white/50 text-sm">
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" style={{ color: themeColor }} />
-                    查询中...
-                  </motion.div>
-                ) : stockData || error ? (
-                  <motion.button key="clear" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                    onClick={handleClear}
-                    className="px-4 hover:bg-white/5 transition-colors text-white/40 hover:text-white/70">
-                    <X className="w-5 h-5" />
-                  </motion.button>
-                ) : (
-                  <motion.button key="search" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                    onClick={() => handleSearch(query)}
-                    className="px-5 text-white text-sm font-semibold hover:opacity-90 transition-opacity flex items-center gap-2"
-                    style={{ background: `linear-gradient(135deg, ${themeColor}, ${themeColor}cc)` }}>
-                    <Search className="w-4 h-4" />
-                    分析
-                  </motion.button>
-                )}
-              </AnimatePresence>
+              {isLoading ? (
+                <div className="flex items-center px-5 text-white/50 text-sm">
+                  <Loader2 className="w-4 h-4 animate-spin mr-2 text-[#0095ff]" />
+                  查询中...
+                </div>
+              ) : stockData || error ? (
+                <button onClick={handleClear}
+                  className="px-4 hover:bg-white/5 transition-colors text-white/40 hover:text-white/70">
+                  <X className="w-5 h-5" />
+                </button>
+              ) : (
+                <button onClick={() => handleSearch(query)}
+                  className="px-5 bg-[#0095ff] text-white text-sm font-semibold hover:opacity-90 transition-opacity flex items-center gap-2">
+                  <Search className="w-4 h-4" />
+                  分析
+                </button>
+              )}
             </div>
             {/* 搜索下拉 */}
             <AnimatePresence>
@@ -739,7 +821,7 @@ export default function Home() {
               }
             </div>
           </div>
-        </motion.div>
+        </div>
 
         {/* Error */}
         <AnimatePresence>
@@ -1087,9 +1169,8 @@ export default function Home() {
             ) : !isLoading && <div className="text-sm text-white/30 text-center py-6">暂无中美映射信息</div>}
           </div>
 
-          {/* ── Peer Comparison (span-4) - China only ── */}
-          {market === 'cn' && (
-            <div className="card-style col-span-6 lg:col-span-4">
+          {/* ── Peer Comparison (span-4) ── */}
+          <div className="card-style col-span-6 lg:col-span-4">
               <CardHeader icon="🏅" title="同行对比" />
               {isLoading ? (
                 <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-8 skeleton-bar rounded" />)}</div>
@@ -1118,7 +1199,6 @@ export default function Home() {
                 <div className="text-sm text-white/30 text-center py-6">暂无同行数据</div>
               )}
             </div>
-          )}
 
           {/* ── Comprehensive Score (span-12) ── */}
           <div className="card-style col-span-12 comprehensive-card">
@@ -1170,6 +1250,25 @@ export default function Home() {
                 )
               })}
             </div>
+          </div>
+
+          {/* ── Financial Analysis Panel (span-12) ── */}
+          <div className="card-style col-span-12">
+            <div className="flex items-center gap-2 mb-5">
+              <span className="text-lg">📋</span>
+              <h3 className="text-[15px] font-semibold">深度金融分析</h3>
+              <span className="text-[10px] px-2 py-0.5 rounded bg-[rgba(255,215,0,0.15)] text-[#ffd700] border border-[rgba(255,215,0,0.3)] font-medium">投行级</span>
+            </div>
+            {isLoading ? (
+              <div className="space-y-3">
+                <div className="h-10 bg-white/5 rounded-lg animate-pulse" />
+                <div className="h-24 bg-white/5 rounded-lg animate-pulse" />
+              </div>
+            ) : stockData ? (
+              <AnalysisButtons symbol={stockData.symbol} market={apiMarket} />
+            ) : (
+              <div className="h-24 flex items-center justify-center text-white/30 text-sm">输入股票代码获取深度分析</div>
+            )}
           </div>
 
           {/* ── MA Evaluation (span-6) ── */}
@@ -1276,18 +1375,6 @@ export default function Home() {
               </div>
             )}
           </div>
-
-          {/* ── Financial Analysis Panel (span-12) ── */}
-          {stockData && (
-            <div className="card-style col-span-12">
-              <div className="flex items-center gap-2 mb-5">
-                <span className="text-lg">📋</span>
-                <h3 className="text-[15px] font-semibold">深度金融分析</h3>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-[rgba(255,215,0,0.15)] text-[#ffd700] border border-[rgba(255,215,0,0.3)] font-medium">投行级</span>
-              </div>
-              <AnalysisButtons symbol={stockData.symbol} market={apiMarket} />
-            </div>
-          )}
 
         </div>
       </main>

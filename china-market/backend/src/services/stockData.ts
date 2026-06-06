@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { cache, cacheKeys } from './cache.js'
 import { calculateScores, type StockData, type ScoreResult } from './scorer.js'
-import { generateStockSummary, type DimensionSummary } from './aiSummary.js'
+import { generateStockSummary, generateFallbackSummaries, type DimensionSummary } from './aiSummary.js'
 import { getChinaStockBasic, CHINA_STOCKS_MAP } from './chinaStocks.js'
 
 // API 配置
@@ -142,6 +142,28 @@ async function fetchPeerBenchmarks(symbol: string): Promise<NonNullable<StockDat
   } catch { return {} }
 }
 
+// 获取A股同行列表：从东方财富行业板块成分股获取（Finnhub对A股无效）
+async function fetchChinaPeers(symbol: string): Promise<string[]> {
+  try {
+    // 东方财富行业板块成分股（按市值降序取前6）
+    const res = await axios.get('https://push2delay.eastmoney.com/api/qt/clist/get', {
+      params: {
+        pn: 1, pz: 20, po: 1, np: 1, fltt: 2, invt: 2,
+        fid: 'f20', // 按市值排序
+        fs: 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23', // 沪深A股
+        fields: 'f12'
+      },
+      headers: { Referer: 'https://quote.eastmoney.com/', 'User-Agent': 'Mozilla/5.0' },
+      timeout: 8000
+    })
+    // 取同行业市值前6的股票
+    const diff = res.data?.data?.diff || []
+    return diff.slice(0, 6).map((item: any) => item.f12).filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
 // 获取同行股票列表（top 6，按市值降序排列）
 async function fetchPeerStockList(symbol: string, finnhubKey: string): Promise<Array<{
   symbol: string
@@ -152,8 +174,129 @@ async function fetchPeerStockList(symbol: string, finnhubKey: string): Promise<A
   revenueGrowth: number
   profitGrowth: number
 }>> {
+  const market = getStockMarket(symbol)
+  if (market === 'china') {
+    return await fetchChinaPeerList(symbol)
+  }
+  return await fetchUsPeerList(symbol, finnhubKey)
+}
+
+// A股同行列表：从东方财富行业板块成分股获取
+async function fetchChinaPeerList(symbol: string): Promise<Array<{
+  symbol: string; name: string; marketCap: number
+  pe: number; roe: number; revenueGrowth: number; profitGrowth: number
+}>> {
   try {
-    // 1. 获取同行列表
+    const code6 = symbol.replace(/\D/g, '').slice(0, 6)
+    const isShanghai = /^(600|601|603|688)/.test(code6)
+
+    // 1. 从本地库获取同行业股票
+    const basicInfo = CHINA_STOCKS_MAP[code6]
+    const myIndustry = basicInfo?.industry || ''
+
+    let candidates: Array<{symbol: string; name: string; marketCap: number; pe: number; roe: number; revenueGrowth: number; profitGrowth: number}> = []
+
+    if (myIndustry) {
+      const sameIndustry = Object.entries(CHINA_STOCKS_MAP)
+        .filter(([code, info]: [string, any]) => info.industry === myIndustry && code !== code6)
+        .slice(0, 10)
+
+      for (const entry of sameIndustry) {
+        const [code, info]: [string, any] = entry
+        const c6 = code.replace(/\D/g, '').slice(0, 6)
+        const secid = /^(600|601|603|688)/.test(c6) ? `1.${c6}` : `0.${c6}`
+        try {
+          const qRes = await axios.get('https://push2delay.eastmoney.com/api/qt/stock/get', {
+            params: { secid, fields: 'f57,f58,f162,f167,f116' },
+            headers: { Referer: 'https://quote.eastmoney.com/' },
+            timeout: 6000
+          }).catch(() => ({ data: null }))
+          const q = qRes.data?.data
+          if (q) {
+            candidates.push({
+              symbol: code, name: info.name || q.f58 || code,
+              marketCap: (q.f116 || 0) / 1e8,
+              pe: (q.f162 || 0) / 100,
+              roe: 0, revenueGrowth: 0, profitGrowth: 0
+            })
+          }
+        } catch {}
+      }
+    }
+
+    // 2. 若不够6只 → 用东方财富电力板块成分股兜底
+    if (candidates.length < 6) {
+      // 东方财富行业板块代码映射
+      const industryMap: Record<string, string> = {
+        '电力': 'BK0428', '煤炭': 'BK0429', '钢铁': 'BK0432',
+        '石油': 'BK0437', '银行': 'BK0475', '证券': 'BK0473',
+        '房地产': 'BK0451', '军工': 'BK0480', '医药': 'BK0445',
+        '电子': 'BK0436', '汽车': 'BK0441', '通信': 'BK0448',
+        '计算机': 'BK0439', '传媒': 'BK0454', '环保': 'BK0442',
+      }
+      const bkCode = industryMap[myIndustry] || 'BK0428' // 默认电力
+
+      const res = await axios.get('https://push2delay.eastmoney.com/api/qt/clist/get', {
+        params: { pn: 1, pz: 50, po: 1, np: 1, fltt: 2, invt: 2, fid: 'f20', fs: `b:${bkCode}`, fields: 'f12,f14' },
+        headers: { Referer: 'https://quote.eastmoney.com/', 'User-Agent': 'Mozilla/5.0' },
+        timeout: 8000
+      }).catch(() => ({ data: null }))
+      const diff = res?.data?.data?.diff || []
+      const used = new Set([code6, ...candidates.map(p => p.symbol)])
+
+      for (const item of diff) {
+        if (used.has(item.f12)) continue
+        const c6 = item.f12
+        const secid = /^(600|601|603|688)/.test(c6) ? `1.${c6}` : `0.${c6}`
+        try {
+          const qRes = await axios.get('https://push2delay.eastmoney.com/api/qt/stock/get', {
+            params: { secid, fields: 'f57,f58,f162,f167,f116' },
+            headers: { Referer: 'https://quote.eastmoney.com/' },
+            timeout: 6000
+          }).catch(() => ({ data: null }))
+          const q = qRes.data?.data
+          if (q) {
+            candidates.push({
+              symbol: item.f12, name: q.f58 || item.f14 || item.f12,
+              marketCap: (q.f116 || 0) / 1e8,
+              pe: (q.f162 || 0) / 100,
+              roe: 0, revenueGrowth: 0, profitGrowth: 0
+            })
+            used.add(item.f12)
+          }
+        } catch {}
+        if (candidates.length >= 6) break
+      }
+    }
+
+    // 3. 加入自身
+    const hasSelf = candidates.some(p => p.symbol === code6)
+    if (!hasSelf) {
+      const secid = isShanghai ? `1.${code6}` : `0.${code6}`
+      const qRes = await axios.get('https://push2delay.eastmoney.com/api/qt/stock/get', {
+        params: { secid, fields: 'f57,f58,f162,f167,f116' },
+        headers: { Referer: 'https://quote.eastmoney.com/' },
+        timeout: 6000
+      }).catch(() => ({ data: null }))
+      const q = qRes.data?.data
+      if (q) {
+        candidates.unshift({ symbol: code6, name: q.f58 || code6, marketCap: (q.f116 || 0) / 1e8, pe: (q.f162 || 0) / 100, roe: 0, revenueGrowth: 0, profitGrowth: 0 })
+      }
+    }
+
+    return candidates.slice(0, 6)
+  } catch (e: any) {
+    console.error('fetchChinaPeerList error:', e.message)
+    return []
+  }
+}
+
+// 美股同行列表（Finnhub）
+async function fetchUsPeerList(symbol: string, finnhubKey: string): Promise<Array<{
+  symbol: string; name: string; marketCap: number
+  pe: number; roe: number; revenueGrowth: number; profitGrowth: number
+}>> {
+  try {
     const peersRes = await axios.get(`https://finnhub.io/api/v1/stock/peers`, {
       params: { symbol, token: finnhubKey },
       timeout: 5000
@@ -161,7 +304,6 @@ async function fetchPeerStockList(symbol: string, finnhubKey: string): Promise<A
     const peers: string[] = peersRes.data?.slice(0, 6) || []
     if (!peers.length) return []
 
-    // 2. 获取当前股票和所有同行的 metrics（并行）
     const allSymbols = [symbol, ...peers]
     const metricsResults = await Promise.allSettled(
       allSymbols.map(s =>
@@ -177,7 +319,6 @@ async function fetchPeerStockList(symbol: string, finnhubKey: string): Promise<A
       .filter(r => r.status === 'fulfilled')
       .map(r => r.value)
 
-    // 3. 获取所有股票的 profile（用于股票名称）
     const profileResults = await Promise.allSettled(
       allSymbols.map(s =>
         axios.get(`https://finnhub.io/api/v1/stock/profile2`, {
@@ -190,13 +331,10 @@ async function fetchPeerStockList(symbol: string, finnhubKey: string): Promise<A
     type ProfileResult = PromiseFulfilledResult<{ symbol: string; name: string }>
     const profiles = new Map<string, string>()
     for (const r of profileResults as ProfileResult[]) {
-      if (r.status === 'fulfilled') {
-        profiles.set(r.value.symbol, r.value.name)
-      }
+      if (r.status === 'fulfilled') profiles.set(r.value.symbol, r.value.name)
     }
 
-    // 4. 转换为 peerBenchmarks 格式，按市值降序排列
-    const peerList = validMetrics
+    return validMetrics
       .map(({ symbol: s, metric }) => ({
         symbol: s,
         name: profiles.get(s) || s,
@@ -208,8 +346,6 @@ async function fetchPeerStockList(symbol: string, finnhubKey: string): Promise<A
       }))
       .sort((a, b) => b.marketCap - a.marketCap)
       .slice(0, 6)
-
-    return peerList
   } catch {
     return []
   }
@@ -531,8 +667,9 @@ async function fetchChinaKLine(symbol: string, period: string): Promise<StockDat
     })
 
     if (res.data.code === 0 && res.data.data.items?.length) {
+      const formatDate = (s: string) => s.length === 8 ? `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}` : s
       const data = res.data.data.items.map(([date, open, high, low, close, vol]: [string, number, number, number, number, number]) => ({
-        date, open, high, low, close, volume: vol
+        date: formatDate(date), open, high, low, close, volume: vol
       })).reverse()
 
       return {
@@ -573,7 +710,7 @@ async function fetchEMKLine(symbol: string): Promise<StockData['kline'] | null> 
     const data = klines.map(l => {
       const [date, open, close, high, low, vol] = l.split(',')
       return {
-        date: date.replace(/-/g, ''),
+        date,
         open: parseFloat(open),
         close: parseFloat(close),
         high: parseFloat(high),
@@ -856,10 +993,13 @@ export async function getStockData(symbol: string, forcedMarket?: 'us' | 'china'
 
   // 补充同行对比数据
   let peerData: Array<{symbol: string; name: string; marketCap: number; pe: number; roe: number; revenueGrowth: number; profitGrowth: number}> = []
-  const isChinaStock = /^(sh|sz|688|002|003|600|601|603|000|001)/i.test(symbol)
+  const isChinaStock = /^(sh|sz|688|002|003|300|600|601|603|000|001)/i.test(symbol)
 
-  if (!isChinaStock) {
-    // 非A股：走 Finnhub
+  if (isChinaStock) {
+    // A股：从东方财富获取行业同行（Finnhub对A股无效）
+    peerData = await fetchChinaPeerList(symbol)
+  } else {
+    // 美股：走 Finnhub
     peerData = await fetchPeerStockList(symbol, FINNHUB_KEY)
   }
 
@@ -917,31 +1057,50 @@ export async function getStockData(symbol: string, forcedMarket?: 'us' | 'china'
 
   scoreResult.peerBenchmarks = peerData.slice(0, 6)
 
-  // 生成 AI 摘要 (异步，不阻塞返回)
-  generateStockSummary(
-    scoreResult.symbol,
-    scoreResult.name,
-    scoreResult.cedarScore,
-    scoreResult.cedarLevel,
-    scoreResult.trackScore,
-    scoreResult.growthScore,
-    scoreResult.valuationScore,
-    scoreResult.riskScore,
-    scoreResult.marketTemp,
-    scoreResult.price,
-    scoreResult.industry,
-    scoreResult.industryTrack,
-    scoreResult.maEvaluation,
-    scoreResult.chinaUsMapping
-  ).then(summaries => {
-    scoreResult.summary = summaries
-    const cacheKey = `stock:score:${symbol.toUpperCase()}`
-    cache.set(cacheKey, scoreResult, 3600)
-  }).catch(err => {
+  // 生成 AI 摘要（同步，等待完成再返回，超时用fallback）
+  try {
+    scoreResult.summary = await Promise.race([
+      generateStockSummary(
+        scoreResult.symbol,
+        scoreResult.name,
+        scoreResult.cedarScore,
+        scoreResult.cedarLevel,
+        scoreResult.trackScore,
+        scoreResult.growthScore,
+        scoreResult.valuationScore,
+        scoreResult.riskScore,
+        scoreResult.marketTemp,
+        scoreResult.price,
+        scoreResult.industry,
+        scoreResult.industryTrack,
+        scoreResult.maEvaluation,
+        scoreResult.chinaUsMapping
+      ),
+      new Promise<DimensionSummary[]>(resolve => setTimeout(() => {
+        resolve(generateFallbackSummaries(
+          scoreResult.symbol,
+          scoreResult.name,
+          scoreResult.cedarScore,
+          scoreResult.cedarLevel,
+          scoreResult.trackScore,
+          scoreResult.growthScore,
+          scoreResult.valuationScore,
+          scoreResult.riskScore,
+          scoreResult.marketTemp,
+          scoreResult.price,
+          scoreResult.industry,
+          scoreResult.industryTrack,
+          scoreResult.maEvaluation,
+          scoreResult.chinaUsMapping
+        ))
+      }, 8000))
+    ])
+  } catch (err) {
     console.error('AI summary generation failed:', err)
-  })
+    scoreResult.summary = []
+  }
 
-  // 缓存结果 (1小时，不含AI摘要，首次有摘要后更新)
+  // 缓存结果 (1小时)
   const cacheKey = `stock:score:${symbol.toUpperCase()}`
   cache.set(cacheKey, scoreResult, 3600)
 
