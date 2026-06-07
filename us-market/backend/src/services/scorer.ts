@@ -101,6 +101,16 @@ export interface ScoreResult {
   
   summary: DimensionSummary[]             // AI 摘要 (预留)
 
+  peerBenchmarks: Array<{               // 同行对比
+    symbol: string
+    name: string
+    marketCap: number
+    pe: number
+    roe: number
+    revenueGrowth: number
+    profitGrowth: number
+  }>
+
   kline: {                   // K线数据 (用于图表展示)
     data: Array<{ date: string; close: number; open: number; high: number; low: number; volume: number }>
     ma: Record<string, number[]>
@@ -210,6 +220,7 @@ export function calculateScores(data: StockData): ScoreResult {
       industryTrackLabel: trackInfo.trackLabel,
       chinaUsMapping,
       summary: [] as DimensionSummary[],
+      peerBenchmarks: [],
       price: {
         current: price.current,
         change: price.change,

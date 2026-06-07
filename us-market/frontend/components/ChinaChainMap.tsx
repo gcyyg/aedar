@@ -52,7 +52,7 @@ export default function ChainMap({ symbol }: { symbol: string }) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 20000)
     
-    const url = `/api/chain/${symbol}`
+    const url = `/cn/api/chain/${symbol}`
     fetch(url, { signal: controller.signal })
       .then(r => {
         clearTimeout(timeout)

@@ -5,8 +5,8 @@ const FINNHUB_KEY = 'd8fo3d9r01qn443auhngd8fo3d9r01qn443auho0'
 
 export async function chainRoutes(app: FastifyInstance) {
 
-  // 获取股票产业链关系
-  app.get<{ Params: { symbol: string } }>('/:symbol/chain', async (req, reply) => {
+  // 获取股票产业链关系（兼容 /api/chain/:symbol 和 /api/chain/:symbol/chain）
+  app.get<{ Params: { symbol: string } }>('/:symbol', async (req, reply) => {
     const { symbol } = req.params
     const upperSymbol = symbol.toUpperCase()
 

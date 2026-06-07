@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { useRouter, usePathname } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Search, TrendingUp, TrendingDown, AlertTriangle,
@@ -10,6 +11,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import ChainMap from '@/components/ChainMap'
+import AnalysisButtons from '@/components/AnalysisPanel'
 
 // ── Types ──────────────────────────────────────────
 interface SearchResult {
@@ -79,7 +81,7 @@ interface StockData {
   industryTrack: 'S' | 'A' | 'B' | 'C'   // 赛道归属
   industryTrackLabel: string              // 赛道标签
   chinaUsMapping: string | null
-  peerBenchmarks: Array<{
+  peerBenchmarks?: Array<{
     symbol: string
     name: string
     marketCap: number
@@ -118,12 +120,12 @@ const cedarLevelConfig: Record<string, { bg: string; border: string; text: strin
 }
 
 // ── Utility ──────────────────────────────────────────
-function formatMarketCap(cap: number) {
+function formatMarketCap(cap: number, prefix: string = '$') {
   if (!cap) return 'N/A'
-  if (cap >= 1e12) return `$${(cap / 1e12).toFixed(2)}万亿`
-  if (cap >= 1e11) return `$${(cap / 1e11).toFixed(2)}千亿`
-  if (cap >= 1e9) return `$${(cap / 1e9).toFixed(2)}亿`
-  return `$${cap.toLocaleString()}`
+  if (cap >= 1e12) return `${prefix}${(cap / 1e12).toFixed(2)}万亿`
+  if (cap >= 1e11) return `${prefix}${(cap / 1e11).toFixed(2)}千亿`
+  if (cap >= 1e9) return `${prefix}${(cap / 1e9).toFixed(2)}亿`
+  return `${prefix}${cap.toLocaleString()}`
 }
 
 function formatDate(iso: string) {
@@ -155,14 +157,11 @@ function AnimatedNumber({ value, duration = 1200 }: { value: number; duration?: 
 }
 
 // ── Skeleton Lines ──────────────────────────────────────────
-function SkeletonLines({ count = 3, seed = 0 }: { count?: number; seed?: number }) {
-  const widths = useMemo(() => 
-    Array.from({ length: count }, (_, i) => 60 + ((seed + i * 17) % 40)), 
-  [count, seed])
+function SkeletonLines({ count = 3 }: { count?: number }) {
   return (
     <div className="flex flex-col gap-2">
-      {widths.map((w, i) => (
-        <div key={i} className="h-4 skeleton-bar rounded" style={{ width: `${w}%` }} />
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="h-4 skeleton-bar rounded" style={{ width: `${60 + Math.random() * 40}%` }} />
       ))}
     </div>
   )
@@ -420,12 +419,19 @@ function StockChart({ kline }: { kline: { data: { date: string; open: number; hi
 
 // ── Main Page ──────────────────────────────────────────
 export default function Home() {
-  
+  const router = useRouter()
+  const pathname = usePathname()
+  const [market, setMarket] = useState<'us' | 'cn'>('us')
+  // 根据URL路径同步市场状态
+  useEffect(() => {
+    if (pathname === '/cn') setMarket('cn')
+    else setMarket('us')
+  }, [pathname])
   const [query, setQuery] = useState('')
   const [stockData, setStockData] = useState<StockData | null>(null)
   const [recentSearches, setRecentSearches] = useState<string[]>(() => {
     if (typeof window !== 'undefined') {
-      try { return JSON.parse(localStorage.getItem('cedar_recent_china') || '[]') } catch { return [] }
+      try { return JSON.parse(localStorage.getItem('cedar_recent_us') || '[]') } catch { return [] }
     }
     return []
   })
@@ -438,9 +444,38 @@ export default function Home() {
   const [showDropdown, setShowDropdown] = useState(false)
   const searchTimerRef = useRef<NodeJS.Timeout | null>(null)
 
+  // Derive theme values
+  const themeColor = market === 'us' ? '#0095ff' : '#ff3d71'
+  const symbolPrefix = market === 'us' ? '$' : '¥'
+  const storageKey = market === 'us' ? 'cedar_recent_us' : 'cedar_recent_cn'
+  const apiMarket = market === 'us' ? 'us' : 'china'
+  const usPlaceholder = 'AAPL, NVDA, TSLA...'
+  const cnPlaceholder = '600519, 贵州茅台, 五粮液, mt...'
+  const usDefaults = ['NVDA', 'AAPL', 'TSLA', 'MSFT']
+  const cnDefaults = ['600519', '000858', '601318', '300750']
+
+  const handleSearchInputChange = (value: string) => {
+    setQuery(value)
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+    if (!value.trim() || value.trim().length < 1) {
+      setSearchResults([])
+      setShowDropdown(false)
+      return
+    }
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/stock/search?q=${encodeURIComponent(value.trim())}&market=${apiMarket}`)
+        if (res.ok) {
+          const data = await res.json()
+          setSearchResults(data.results || [])
+          setShowDropdown(true)
+        }
+      } catch {}
+    }, 300)
+  }
+
   const addRecent = (code: string) => {
     const normalized = code.trim().toUpperCase()
-    const storageKey = 'cedar_recent_china'
     setRecentSearches(prev => {
       const filtered = prev.filter(c => c !== normalized)
       const next = [normalized, ...filtered].slice(0, 6)
@@ -460,7 +495,7 @@ export default function Home() {
     try {
       // 如果输入的是拼音首字母或全拼，先查询真实代码
       let symbol = q.trim()
-      const searchRes = await fetch(`/api/stock/search?q=${encodeURIComponent(symbol)}`, { signal: controller.signal })
+      const searchRes = await fetch(`/api/stock/search?q=${encodeURIComponent(symbol)}&market=${apiMarket}`, { signal: controller.signal })
       if (searchRes.ok) {
         const searchData = await searchRes.json()
         if (searchData.results?.length > 0) {
@@ -468,12 +503,18 @@ export default function Home() {
         }
       }
 
-      // 并行请求：完整评分 + K线（基础信息已包含在完整评分返回中）
-      const [stockRes, klineRes] = await Promise.all([
-        fetch(`/api/stock/${encodeURIComponent(symbol)}`, { signal: controller.signal }),
-        fetch(`/api/stock/kline/${encodeURIComponent(symbol)}`, { signal: controller.signal }),
+      // 并行请求：基础信息 + 完整评分 + K线
+      const [basicRes, stockRes, klineRes] = await Promise.all([
+        fetch(`/api/stock/basic/${encodeURIComponent(symbol)}?market=${apiMarket}`, { signal: controller.signal }),
+        fetch(`/api/stock/${encodeURIComponent(symbol)}?market=${apiMarket}`, { signal: controller.signal }),
+        fetch(`/api/stock/kline/${encodeURIComponent(symbol)}?market=${apiMarket}`, { signal: controller.signal }),
       ])
       clearTimeout(timeoutId)
+
+      const basicJson = await basicRes.json().catch(() => null)
+      if (basicRes.ok && basicJson) {
+        setBasicData(basicJson)
+      }
 
       const klineJson = await klineRes.json().catch(() => null)
       if (klineRes.ok && klineJson && klineJson.kline?.data?.length) {
@@ -486,8 +527,6 @@ export default function Home() {
       }
       const data = await stockRes.json()
       setStockData(data)
-      // 基础信息从完整评分数据中提取
-      setBasicData({ symbol: data.symbol, name: data.name, market: 'china' })
       setLastUpdated(new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
     } catch (e: any) {
       if (e.name === 'AbortError') {
@@ -501,26 +540,6 @@ export default function Home() {
     }
   }
 
-  const handleSearchInputChange = useCallback((value: string) => {
-    setQuery(value)
-    if (!value.trim()) {
-      setShowDropdown(false)
-      setSearchResults([])
-      return
-    }
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
-    searchTimerRef.current = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/stock/search?q=${encodeURIComponent(value.trim())}`)
-        if (res.ok) {
-          const data = await res.json()
-          setSearchResults(data.results || [])
-          setShowDropdown(true)
-        }
-      } catch {}
-    }, 200)
-  }, [])
-
   const handleQuickSearch = (code: string) => {
     setQuery(code)
     handleSearch(code)
@@ -532,6 +551,32 @@ export default function Home() {
     setBasicData(null)
     setKlineData(null)
     setError('')
+  }
+
+  const handleMarketSwitch = (newMarket: 'us' | 'cn') => {
+    // 切换市场时通过URL路径跳转，避免刷新页面
+    if (newMarket === 'cn') {
+      router.push('/cn')
+      return
+    }
+    // 美股市场：从/cn路径切回根路径
+    if (pathname === '/cn') {
+      router.push('/')
+      return
+    }
+    setMarket(newMarket)
+    setQuery('')
+    setStockData(null)
+    setBasicData(null)
+    setKlineData(null)
+    setError('')
+    // Reload recent searches for new market
+    if (typeof window !== 'undefined') {
+      try {
+        const key = newMarket === 'us' ? 'cedar_recent_us' : 'cedar_recent_cn'
+        setRecentSearches(JSON.parse(localStorage.getItem(key) || '[]'))
+      } catch { setRecentSearches([]) }
+    }
   }
 
   const g = stockData ? gradeConfig[stockData.cedarLevel] : null
@@ -574,21 +619,37 @@ export default function Home() {
         >
           <div className="max-w-lg mx-auto text-center">
             {/* Market Selector */}
+            {/* Market Selector */}
             <div className="flex justify-center gap-3 mb-5">
-              <button onClick={() => window.open('https://us.aedar.site', '_self')} className="px-5 py-2.5 rounded-xl border text-sm font-medium transition-all bg-white/[0.03] border-white/[0.08] text-white/40 hover:border-white/[0.15] cursor-pointer">
+              <button
+                onClick={() => handleMarketSwitch('us')}
+                className={`px-5 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+                  market === 'us'
+                    ? 'bg-[#0095ff]/15 border-[#0095ff]/40 text-[#0095ff] shadow-[0_0_12px_rgba(0,149,255,0.2)]'
+                    : 'bg-white/[0.03] border-white/[0.08] text-white/40 hover:border-white/[0.15] cursor-pointer'
+                }`}
+              >
                 🏛 大漂亮
               </button>
-              <button className="px-5 py-2.5 rounded-xl border text-sm font-medium transition-all bg-[#ff3d71]/15 border-[#ff3d71]/40 text-[#ff3d71] shadow-[0_0_12px_rgba(255,61,113,0.2)]">
+              <button
+                onClick={() => handleMarketSwitch('cn')}
+                className={`px-5 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+                  market === 'cn'
+                    ? 'bg-[#ff3d71]/15 border-[#ff3d71]/40 text-[#ff3d71] shadow-[0_0_12px_rgba(255,61,113,0.2)]'
+                    : 'bg-white/[0.03] border-white/[0.08] text-white/40 hover:border-white/[0.15] cursor-pointer'
+                }`}
+              >
                 🏯 中国大爱
               </button>
             </div>
 
             <label className="text-[11px] text-white/30 tracking-widest uppercase block mb-3">
-              输入A股代码 (如 600519, 000858, 688981)
+              {market === 'us' ? '输入美股代码 (如 AAPL, NVDA, TSLA)' : '输入A股代码 (如 600519, 000858, 688981)'}
             </label>
-            <div className="flex bg-[rgba(15,15,25,0.8)] border border-white/[0.08] rounded-xl overflow-hidden focus-within:border-[#ff3d71] focus-within:shadow-[0_0_0_3px_rgba(255,61,113,0.1)] transition-all">
-              <div className="flex items-center px-4 text-[#ff3d71] font-medium border-r border-white/[0.08] bg-[rgba(255,61,113,0.05)]">
-                <span className="text-base">¥</span>
+            <div className={`flex bg-[rgba(15,15,25,0.8)] border border-white/[0.08] rounded-xl overflow-hidden transition-all focus-within:border-[${themeColor}] focus-within:shadow-[0_0_0_3px_rgba(0,0,0,0.1)]`}>
+              <div className="flex items-center px-4 font-medium border-r border-white/[0.08]"
+                style={{ color: themeColor, background: `${themeColor}0d` }}>
+                <span className="text-base">{symbolPrefix}</span>
               </div>
               <input
                 type="text"
@@ -601,14 +662,14 @@ export default function Home() {
                   } else if (e.key === 'Escape') setShowDropdown(false)
                 }}
                 onFocus={() => query.trim() && setShowDropdown(true)}
-                placeholder='600519, 贵州茅台, 五粮液, mt...'
+                placeholder={market === 'us' ? usPlaceholder : cnPlaceholder}
                 className="flex-1 bg-transparent px-5 py-4 text-[18px] font-mono font-medium text-white outline-none placeholder:text-white/30 placeholder:font-normal"
               />
               <AnimatePresence mode="wait">
                 {isLoading ? (
                   <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                     className="flex items-center px-5 text-white/50 text-sm">
-                    <Loader2 className="w-4 h-4 animate-spin mr-2 text-[#ff3d71]" />
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" style={{ color: themeColor }} />
                     查询中...
                   </motion.div>
                 ) : stockData || error ? (
@@ -620,7 +681,8 @@ export default function Home() {
                 ) : (
                   <motion.button key="search" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                     onClick={() => handleSearch(query)}
-                    className="px-5 bg-gradient-to-r from-[#0095ff] to-[#0077cc] text-white text-sm font-semibold hover:opacity-90 transition-opacity flex items-center gap-2">
+                    className="px-5 text-white text-sm font-semibold hover:opacity-90 transition-opacity flex items-center gap-2"
+                    style={{ background: `linear-gradient(135deg, ${themeColor}, ${themeColor}cc)` }}>
                     <Search className="w-4 h-4" />
                     分析
                   </motion.button>
@@ -645,7 +707,7 @@ export default function Home() {
                       }}
                         className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.06] transition-colors text-left border-b border-white/[0.06] last:border-0"
                       >
-                        <span className="text-[13px] font-mono font-semibold text-[#ff3d71] w-10">{item.symbol}</span>
+                        <span className="text-[13px] font-mono font-semibold w-10" style={{ color: themeColor }}>{item.symbol}</span>
                         <span className="text-[13px] text-white/80">{item.name}</span>
                         <span className="text-[10px] text-white/30 ml-auto">{item.market}</span>
                       </button>
@@ -659,13 +721,18 @@ export default function Home() {
               {recentSearches.length > 0
                 ? recentSearches.map(code => (
                     <button key={code} onClick={() => handleQuickSearch(code)}
-                      className="text-[11px] font-mono px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] text-white/50 hover:border-[#0095ff]/50 hover:text-[#ff3d71] hover:bg-[#0095ff]/10 transition-all">
+                      className="text-[11px] font-mono px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] text-white/50 hover:border-[#0095ff]/50 hover:text-[#0095ff] hover:bg-[#0095ff]/10 transition-all"
+                      style={market === 'cn' ? {
+                        '--hover-color': '#ff3d71',
+                        '--hover-bg': 'rgba(255,61,113,0.1)',
+                      } as React.CSSProperties : {}}
+                    >
                       {code}
                     </button>
                   ))
-                : ['600519', '000858', '601318', '300750'].map(code => (
+                : (market === 'us' ? usDefaults : cnDefaults).map(code => (
                     <button key={code} onClick={() => handleQuickSearch(code)}
-                      className="text-[11px] font-mono px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] text-white/50 hover:border-[#0095ff]/50 hover:text-[#ff3d71] hover:bg-[#0095ff]/10 transition-all">
+                      className="text-[11px] font-mono px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] text-white/50 hover:border-[#0095ff]/50 hover:text-[#0095ff] hover:bg-[#0095ff]/10 transition-all">
                       {code}
                     </button>
                   ))
@@ -711,8 +778,8 @@ export default function Home() {
             </div>
             <div className="grid grid-cols-3 gap-4">
               {(isLoading ? Array(9).fill(null) : [
-                { label: '当前价格', value: `$${stockData?.price.current?.toFixed(2) || 'N/A'}`, extra: stockData && (stockData.price.changePercent > 0 ? `+${stockData.price.changePercent.toFixed(2)}%` : `${stockData.price.changePercent.toFixed(2)}%`), isGain: stockData ? stockData.price.changePercent >= 0 : null },
-                { label: '市值', value: formatMarketCap(stockData?.price.marketCap ?? 0), extra: null, isGain: null },
+                { label: '当前价格', value: `${symbolPrefix}${stockData?.price.current?.toFixed(2) || 'N/A'}`, extra: stockData && (stockData.price.changePercent > 0 ? `+${stockData.price.changePercent.toFixed(2)}%` : `${stockData.price.changePercent.toFixed(2)}%`), isGain: stockData ? stockData.price.changePercent >= 0 : null },
+                { label: '市值', value: formatMarketCap(stockData?.price.marketCap ?? 0, symbolPrefix), extra: null, isGain: null },
                 { label: 'PE', value: stockData?.price.pe ? stockData.price.pe.toFixed(1) : 'N/A', extra: null, isGain: null },
                 { label: 'ROE', value: stockData?.price.roe ? `${stockData.price.roe.toFixed(1)}%` : 'N/A', extra: null, isGain: stockData?.price.roe ? stockData.price.roe > 0 : null },
                 { label: 'PS', value: stockData?.price.ps ? stockData.price.ps.toFixed(1) : 'N/A', extra: null, isGain: null },
@@ -1020,36 +1087,38 @@ export default function Home() {
             ) : !isLoading && <div className="text-sm text-white/30 text-center py-6">暂无中美映射信息</div>}
           </div>
 
-          {/* ── Peer Comparison (span-4) ── */}
-          <div className="card-style col-span-6 lg:col-span-4">
-            <CardHeader icon="🏅" title="同行对比" />
-            {isLoading ? (
-              <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-8 skeleton-bar rounded" />)}</div>
-            ) : stockData?.peerBenchmarks && stockData.peerBenchmarks.length > 0 ? (
-              <div className="space-y-2">
-                {stockData.peerBenchmarks.slice(0, 6).map((peer, i) => (
-                  <div key={peer.symbol} className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${
-                        i === 0 ? 'bg-[#ffd700]/20 text-[#ffd700]' :
-                        i === 1 ? 'bg-[#c0c0c0]/20 text-[#c0c0c0]' :
-                        i === 2 ? 'bg-[#cd7f32]/20 text-[#cd7f32]' :
-                        'bg-white/5 text-white/40'
-                      }`}>{i + 1}</span>
-                      <span className="font-mono text-white/70">{peer.symbol}</span>
-                      <span className="text-white/40 truncate max-w-[80px]">{peer.name}</span>
+          {/* ── Peer Comparison (span-4) - China only ── */}
+          {market === 'cn' && (
+            <div className="card-style col-span-6 lg:col-span-4">
+              <CardHeader icon="🏅" title="同行对比" />
+              {isLoading ? (
+                <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-8 skeleton-bar rounded" />)}</div>
+              ) : stockData?.peerBenchmarks && stockData.peerBenchmarks.length > 0 ? (
+                <div className="space-y-2">
+                  {stockData.peerBenchmarks.slice(0, 6).map((peer, i) => (
+                    <div key={peer.symbol} className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${
+                          i === 0 ? 'bg-[#ffd700]/20 text-[#ffd700]' :
+                          i === 1 ? 'bg-[#c0c0c0]/20 text-[#c0c0c0]' :
+                          i === 2 ? 'bg-[#cd7f32]/20 text-[#cd7f32]' :
+                          'bg-white/5 text-white/40'
+                        }`}>{i + 1}</span>
+                        <span className="font-mono text-white/70">{peer.symbol}</span>
+                        <span className="text-white/40 truncate max-w-[80px]">{peer.name}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-white/50 text-[11px]">PE </span>
+                        <span className="font-mono text-white/70">{peer.pe > 0 ? peer.pe.toFixed(1) : 'N/A'}</span>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <span className="text-white/50 text-[11px]">PE </span>
-                      <span className="font-mono text-white/70">{peer.pe > 0 ? peer.pe.toFixed(1) : 'N/A'}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : !isLoading && (
-              <div className="text-sm text-white/30 text-center py-6">暂无同行数据</div>
-            )}
-          </div>
+                  ))}
+                </div>
+              ) : !isLoading && (
+                <div className="text-sm text-white/30 text-center py-6">暂无同行数据</div>
+              )}
+            </div>
+          )}
 
           {/* ── Comprehensive Score (span-12) ── */}
           <div className="card-style col-span-12 comprehensive-card">
@@ -1176,7 +1245,7 @@ export default function Home() {
               <div className="flex items-center gap-2">
                 <span className="text-lg">📝</span>
                 <h3 className="text-[15px] font-semibold">AI 投资总结</h3>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-[rgba(0,149,255,0.15)] text-[#ff3d71] border border-[rgba(0,149,255,0.3)] font-medium">MiniMax-M2</span>
+                <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: `${themeColor}26`, color: themeColor, border: `1px solid ${themeColor}4d` }}>MiniMax-M2</span>
               </div>
             </div>
             {isLoading ? (
@@ -1207,6 +1276,18 @@ export default function Home() {
               </div>
             )}
           </div>
+
+          {/* ── Financial Analysis Panel (span-12) ── */}
+          {stockData && (
+            <div className="card-style col-span-12">
+              <div className="flex items-center gap-2 mb-5">
+                <span className="text-lg">📋</span>
+                <h3 className="text-[15px] font-semibold">深度金融分析</h3>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-[rgba(255,215,0,0.15)] text-[#ffd700] border border-[rgba(255,215,0,0.3)] font-medium">投行级</span>
+              </div>
+              <AnalysisButtons symbol={stockData.symbol} market={apiMarket} />
+            </div>
+          )}
 
         </div>
       </main>

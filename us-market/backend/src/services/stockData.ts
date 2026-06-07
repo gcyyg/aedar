@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { cache, cacheKeys } from './cache.js'
 import { calculateScores, type StockData, type ScoreResult } from './scorer.js'
-import { generateStockSummary, type DimensionSummary } from './aiSummary.js'
+import { generateStockSummary, generateFallbackSummaries, type DimensionSummary } from './aiSummary.js'
 import { getChinaStockBasic } from './chinaStocks.js'
 
 // API 配置
@@ -135,6 +135,61 @@ async function fetchPeerBenchmarks(symbol: string): Promise<NonNullable<StockDat
       peg: compare(myMetrics['pegTTM'] || myMetrics['forwardPEG'] || 0, pegMed),
     }
   } catch { return {} }
+}
+
+// 获取同行股票列表（用于同行对比卡片）
+async function fetchPeerList(symbol: string): Promise<Array<{
+  symbol: string
+  name: string
+  marketCap: number
+  pe: number
+  roe: number
+  revenueGrowth: number
+  profitGrowth: number
+}>> {
+  try {
+    // 1. 获取同行代码列表
+    const peersRes = await axios.get(`https://finnhub.io/api/v1/stock/peers`, {
+      params: { symbol, token: FINNHUB_KEY },
+      timeout: 5000
+    })
+    const peers: string[] = peersRes.data?.slice(0, 6) || []
+    if (!peers.length) return []
+
+    // 2. 并行获取每个同行的 profile + metrics
+    const peerRaw = await Promise.allSettled(
+      peers.slice(0, 6).map(async (s) => {
+        const [profileRes, metricRes] = await Promise.all([
+          axios.get(`https://finnhub.io/api/v1/stock/profile2`, {
+            params: { symbol: s, token: FINNHUB_KEY },
+            timeout: 5000
+          }),
+          axios.get(`https://finnhub.io/api/v1/stock/metric`, {
+            params: { symbol: s, token: FINNHUB_KEY, metric: 'all' },
+            timeout: 5000
+          })
+        ])
+        const m = metricRes.data?.metric || {}
+        return {
+          symbol: s,
+          name: profileRes.data?.name || s,
+          marketCap: (m.marketCapitalization || 0) * 1_000_000,
+          pe: m.peBasicExclExtraTTM || m.peTTM || 0,
+          roe: m.roeBasicExclExtraTTMAnn || 0,
+          revenueGrowth: m.revenueGrowthTTMYoy || m.revenueGrowth5Y || 0,
+          profitGrowth: m.epsGrowthTTMYoy || m.epsGrowthQuarterlyYoy || 0,
+        }
+      })
+    )
+
+    const valid = (peerRaw as PromiseFulfilledResult<any>[])
+      .filter(r => r.status === 'fulfilled')
+      .map(r => r.value)
+      .filter(p => p.marketCap > 0)
+
+    // 按市值降序
+    return valid.sort((a, b) => b.marketCap - a.marketCap).slice(0, 6)
+  } catch { return [] }
 }
 
 async function fetchChinaStock(symbol: string): Promise<StockData['basic'] | null> {
@@ -602,33 +657,40 @@ export async function getStockData(symbol: string, forcedMarket?: 'us' | 'china'
 
   const scoreResult = calculateScores(stockData)
 
-  // 生成 AI 摘要 (异步，不阻塞返回)
-  generateStockSummary(
-    scoreResult.symbol,
-    scoreResult.name,
-    scoreResult.cedarScore,
-    scoreResult.cedarLevel,
-    scoreResult.trackScore,
-    scoreResult.growthScore,
-    scoreResult.valuationScore,
-    scoreResult.riskScore,
-    scoreResult.marketTemp,
-    scoreResult.price,
-    scoreResult.industry,
-    scoreResult.industryTrack,
-    scoreResult.maEvaluation,
-    scoreResult.chinaUsMapping
-  ).then(summaries => {
-    scoreResult.summary = summaries
-    const cacheKey = `stock:score:${symbol.toUpperCase()}`
-    cache.set(cacheKey, scoreResult, 3600)
-  }).catch(err => {
-    console.error('AI summary generation failed:', err)
-  })
 
-  // 缓存结果 (1小时，不含AI摘要，首次有摘要后更新)
-  const cacheKey = `stock:score:${symbol.toUpperCase()}`
-  cache.set(cacheKey, scoreResult, 3600)
+  // 同行对比数据（同步等待，确保首次返回即包含）
+  let peerData: Array<{symbol:string;name:string;marketCap:number;pe:number;roe:number;revenueGrowth:number;profitGrowth:number}> = []
+  try {
+    peerData = await fetchPeerList(symbol)
+  } catch (e) { console.error("[peer] fetch failed:", e) }
+  scoreResult.peerBenchmarks = peerData
 
+  // 生成 AI 摘要（同步，等待完成再返回，超时用fallback）
+  try {
+    scoreResult.summary = await Promise.race([
+      generateStockSummary(
+        scoreResult.symbol, scoreResult.name,
+        scoreResult.cedarScore, scoreResult.cedarLevel,
+        scoreResult.trackScore, scoreResult.growthScore,
+        scoreResult.valuationScore, scoreResult.riskScore,
+        scoreResult.marketTemp, scoreResult.price,
+        scoreResult.industry, scoreResult.industryTrack,
+        scoreResult.maEvaluation, scoreResult.chinaUsMapping
+      ),
+      new Promise<DimensionSummary[]>(resolve => setTimeout(() => {
+        resolve(generateFallbackSummaries(
+          scoreResult.symbol, scoreResult.name,
+          scoreResult.cedarScore, scoreResult.cedarLevel,
+          scoreResult.trackScore, scoreResult.growthScore,
+          scoreResult.valuationScore, scoreResult.riskScore,
+          scoreResult.marketTemp, scoreResult.price,
+          scoreResult.industry, scoreResult.industryTrack,
+          scoreResult.maEvaluation, scoreResult.chinaUsMapping
+        ))
+      }, 8000))
+    ])
+  } catch (err) { console.error("AI summary failed:", err); scoreResult.summary = [] }
+
+  cache.set(`stock:score:${symbol.toUpperCase()}`, scoreResult, 3600)
   return scoreResult
 }

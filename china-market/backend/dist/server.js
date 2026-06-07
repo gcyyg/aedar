@@ -4,6 +4,7 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { stockRoutes } from './routes/stock.js';
 import { chainRoutes } from './routes/chain.js';
+import { analysisRoutes } from './routes/analysis.js';
 import { cache } from './services/cache.js';
 const PORT = Number(process.env.PORT) || 3001;
 const app = Fastify({
@@ -21,6 +22,7 @@ app.get('/health', async () => ({
 // 路由
 app.register(stockRoutes, { prefix: '/api/stock' });
 app.register(chainRoutes, { prefix: '/api/chain' });
+app.register(analysisRoutes, { prefix: '/api/analysis' });
 // 启动
 const start = async () => {
     try {

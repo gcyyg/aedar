@@ -2,58 +2,99 @@ import { FastifyInstance } from 'fastify'
 import axios from 'axios'
 import { getStockData, getStockKLine, getStockBasic, getStockPrice } from '../services/stockData.js'
 
-const EM_SEARCH_API = 'https://searchapi.eastmoney.com/api/suggest/get'
-const EM_TOKEN='***'
+// 新浪搜索 API - 替换东方财富（服务器无法访问 eastmoney searchapi）
+const SINA_SEARCH_API = 'https://suggest3.sinajs.cn/suggest/type=&key='
 
-async function emSearch(symbol: string): Promise<{symbol: string; name: string; market: string} | null> {
+interface SinaSearchResult {
+  symbol: string
+  name: string
+  market: string
+  marketCode: string
+}
+
+async function sinaSearch(keyword: string): Promise<SinaSearchResult[]> {
+  const { exec } = await import('child_process')
+  const apiUrl = `${SINA_SEARCH_API}${encodeURIComponent(keyword)}`
+  // 新浪返回GBK编码，需要转换
+  const curlCmd = `curl -s --max-time 10 "${apiUrl}" -H "Referer: https://finance.sina.com.cn" | iconv -f GBK -t UTF-8`
+
   try {
-    const res = await axios.get(EM_SEARCH_API, {
-      params: { input: symbol, type: 14, token: EM_TOKEN, count: 1 },
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.eastmoney.com' }
+    const raw: string = await new Promise((resolve, reject) => {
+      exec(curlCmd, { timeout: 15000 }, (err, stdout) => {
+        if (err) reject(err)
+        else resolve(stdout)
+      })
     })
-    const hits: any[] = res.data?.QuotationCodeTable?.Data || []
-    const h = hits.find((h: any) => h.Classify === 'AStock' && ['1','2'].includes(h.SecurityType))
-    if (h) return { symbol: h.UnifiedCode || h.Code, name: h.Name || h.SecurityName, market: h.SecurityType === '1' ? '沪A' : '深A' }
-  } catch {}
-  return null
+
+    // 新浪返回格式: var suggestvalue="name,11,code,market_code,name,...;..."
+    // type=11 是 A股股票
+    const match = raw.match(/^var suggestvalue="(.+)";?$/)
+    if (!match) return []
+
+    const results: SinaSearchResult[] = []
+    const items = match[1].split(';')
+
+    for (const item of items) {
+      const parts = item.split(',')
+      if (parts.length < 4) continue
+
+      const name = parts[0]
+      const typeCode = parts[1]
+      const code = parts[2]
+      const marketCode = parts[3]
+
+      // 只取 A股 (type=11)
+      if (typeCode !== '11') continue
+      if (!code || !marketCode) continue
+
+      // 过滤纯数字代码（债券、基金等）- 市场代码必须是 sh/sz 开头
+      if (!/^(sh|sz)\d{6}$/.test(marketCode)) continue
+
+      // 修复：用代码查询时 name 在 parts[4]，用名称查询时在 parts[0]
+      let stockName = name
+      if (/^\d{6}$/.test(code) && parts.length >= 5 && !/^\d+$/.test(parts[4])) {
+        stockName = parts[4]
+      }
+      const isShanghai = marketCode.startsWith('sh')
+
+      results.push({
+        symbol: code,
+        name: stockName,
+        market: isShanghai ? '沪A' : '深A',
+        marketCode: marketCode
+      })
+    }
+
+    return results
+  } catch (err) {
+    console.error('[search] sina failed:', err)
+    return []
+  }
 }
 
 export async function stockRoutes(app: FastifyInstance) {
   // 搜索
   app.get('/search', async (req, reply) => {
-    // 直接从 URL 字符串解析查询参数，避免 Fastify query 解析中文问题
-    const urlStr = (req as any).raw?.url || req.url
-    const queryString = urlStr.split('?')[1] || ''
-    const params = new URLSearchParams(queryString)
-    const q = params.get('q') || ''
+    const q = (req.query as any).query || (req.query as any).q || ''
 
     if (!q.trim()) {
       return reply.status(400).send({ error: '搜索词不能为空' })
     }
 
     try {
-      const apiUrl = `${EM_SEARCH_API}?input=${encodeURIComponent(q)}&type=14&token=${EM_TOKEN}&count=10`
-      console.log('[search] apiUrl:', apiUrl)
-      const apiRes = await axios.get(apiUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Referer': 'https://www.eastmoney.com',
-        },
-      })
-      const apiData = apiRes.data
-      const hits: any[] = apiData?.QuotationCodeTable?.Data || []
-      console.log('[search] eastmoney hits:', hits.length)
+      const results = await sinaSearch(q)
+      console.log('[search] sina results:', results.length)
 
-      const results = hits
-        .filter((h: any) => h.Classify === 'AStock' && ['1', '2'].includes(h.SecurityType))
-        .map((h: any) => ({
-          symbol: h.UnifiedCode || h.Code || '',
-          name: h.Name || h.SecurityName || '',
-          market: h.SecurityType === '1' ? '沪A' : '深A',
+      return {
+        query: q,
+        results: results.map(r => ({
+          symbol: r.symbol,
+          name: r.name,
+          market: r.market
         }))
-      return { query: q, results }
+      }
     } catch (err) {
-      console.error('[search] eastmoney failed:', err)
+      console.error('[search] failed:', err)
       return { query: q, results: [] }
     }
   })
@@ -66,7 +107,7 @@ export async function stockRoutes(app: FastifyInstance) {
       // 先尝试 getStockData（完整评分）
       let result = await getStockData(upperSymbol, 'china')
 
-      // 兜底：如果 basic 查不到但 price 存在，用东方财富名称构造基础数据
+      // 兜底：如果 basic 查不到但 price 存在，用新浪搜索获取名称
       if (!result) {
         const [basic, price, kline] = await Promise.all([
           getStockBasic(upperSymbol, 'china'),
@@ -74,12 +115,13 @@ export async function stockRoutes(app: FastifyInstance) {
           getStockKLine(upperSymbol, 'daily', 'china'),
         ])
         if (!basic && price) {
-          // price 存在说明是有效股票，从东方财富搜索获取名称
-          const emInfo = await emSearch(upperSymbol)
+          // price 存在说明是有效股票，从新浪搜索获取名称
+          const sinaResults = await sinaSearch(upperSymbol)
+          const match = sinaResults.find(r => r.symbol === upperSymbol)
           const fallbackBasic = {
             symbol: upperSymbol,
-            name: emInfo?.name || upperSymbol,
-            market: emInfo?.market || 'A股',
+            name: match?.name || upperSymbol,
+            market: match?.market || 'A股',
             industry: '未知行业',
             area: '未知地区',
           }

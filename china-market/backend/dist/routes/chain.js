@@ -1,6 +1,5 @@
 import axios from 'axios';
 import { cache } from '../services/cache.js';
-import { CHINA_STOCKS_MAP } from '../services/chinaStocks.js';
 // East Money API endpoints
 const EM_INDUSTRY_LIST = 'https://push2delay.eastmoney.com/api/qt/clist/get';
 const EM_CONCEPT_LIST = 'https://push2delay.eastmoney.com/api/qt/clist/get';
@@ -657,18 +656,38 @@ function findRelatedIndustries(industry) {
     }
     return { upstream: [], downstream: [], concepts: [] };
 }
-function getStockInfo(symbol) {
-    // 提取纯数字代码
+// 东方财富股票基础信息缓存
+let emStockCache = new Map();
+async function getStockInfoFromEM(symbol) {
     const code = symbol.replace(/\D/g, '').slice(0, 6);
-    // 先查本地缓存
-    const local = CHINA_STOCKS_MAP[code];
-    if (local) {
-        return { name: local.name, industry: local.industry, market: local.market };
+    if (emStockCache.has(code))
+        return emStockCache.get(code);
+    try {
+        const isShanghai = /^(600|601|603|688)/.test(code);
+        const secid = isShanghai ? `1.${code}` : `0.${code}`;
+        const res = await axios.get('https://push2delay.eastmoney.com/api/qt/stock/get', {
+            params: { secid, fields: 'f57,f58,f127,f128' },
+            headers: { Referer: 'https://quote.eastmoney.com/' },
+            timeout: 10000
+        });
+        const d = res.data?.data;
+        if (d) {
+            const info = {
+                name: d.f58 || code,
+                industry: d.f127 || 'Unknown',
+                market: isShanghai ? '沪A' : '深A'
+            };
+            emStockCache.set(code, info);
+            return info;
+        }
+    }
+    catch (e) {
+        console.error('[EM stock info]', code, e.message);
     }
     return null;
 }
-function buildChainGraph(symbol) {
-    const stockInfo = getStockInfo(symbol);
+async function buildChainGraph(symbol) {
+    const stockInfo = await getStockInfoFromEM(symbol);
     const name = stockInfo?.name || symbol;
     const industry = stockInfo?.industry || 'Unknown';
     const market = stockInfo?.market || '沪深';
@@ -688,7 +707,7 @@ function buildChainGraph(symbol) {
         score: 100
     });
     // 2. 查找同行股票（peer）
-    const peerStocks = findPeerStocks(symbol, industry);
+    const peerStocks = await findPeerStocks(symbol, industry);
     for (const peer of peerStocks.slice(0, 5)) {
         nodes.push({
             ...peer,
@@ -704,7 +723,7 @@ function buildChainGraph(symbol) {
     // 3. 查找上下游关系
     const chainInfo = findRelatedIndustries(industry);
     for (const upInd of chainInfo.upstream) {
-        const upStocks = getStocksByIndustry(upInd);
+        const upStocks = await getStocksByIndustry(upInd);
         for (const s of upStocks.slice(0, 3)) {
             if (s.symbol !== symbol && !nodes.find(n => n.symbol === s.symbol)) {
                 nodes.push({ ...s, relation: 'upstream' });
@@ -719,7 +738,7 @@ function buildChainGraph(symbol) {
         }
     }
     for (const downInd of chainInfo.downstream) {
-        const downStocks = getStocksByIndustry(downInd);
+        const downStocks = await getStocksByIndustry(downInd);
         for (const s of downStocks.slice(0, 3)) {
             if (s.symbol !== symbol && !nodes.find(n => n.symbol === s.symbol)) {
                 nodes.push({ ...s, relation: 'downstream' });
@@ -749,36 +768,81 @@ function buildChainGraph(symbol) {
         relatedConcepts
     };
 }
-// 从本地缓存查找同行股票
-function findPeerStocks(symbol, industry) {
-    const peers = [];
-    for (const [code, info] of Object.entries(CHINA_STOCKS_MAP)) {
-        if (info.industry === industry && code !== symbol.replace(/\D/g, '').slice(0, 6)) {
-            peers.push({
-                symbol: code,
-                name: info.name,
-                industry: info.industry,
-                market: info.market
-            });
-        }
+// 根据行业名获取 EM 行业/概念代码（行业优先，概念兜底）
+async function findIndustryCode(industryName) {
+    // 先查行业
+    const industryList = await fetchIndustryList();
+    for (const [code, name] of industryList.entries()) {
+        if (name === industryName)
+            return code;
+        if (name.includes(industryName) || industryName.includes(name))
+            return code;
     }
-    return peers.slice(0, 6);
+    // 概念兜底
+    const conceptList = await fetchConceptList();
+    for (const [code, name] of conceptList.entries()) {
+        if (name === industryName)
+            return code;
+        if (name.includes(industryName) || industryName.includes(name))
+            return code;
+    }
+    return null;
 }
-// 根据行业获取股票
-function getStocksByIndustry(industry) {
-    const stocks = [];
-    const industryKeywords = getIndustryKeywords(industry);
-    for (const [code, info] of Object.entries(CHINA_STOCKS_MAP)) {
-        if (industryKeywords.some(kw => info.industry.includes(kw))) {
-            stocks.push({
-                symbol: code,
-                name: info.name,
-                industry: info.industry,
-                market: info.market
-            });
-        }
+// 从东方财富实时获取同行股票（按行业代码）
+async function findPeerStocks(symbol, industry) {
+    if (industry === 'Unknown')
+        return [];
+    const code = symbol.replace(/\D/g, '').slice(0, 6);
+    const industryCode = await findIndustryCode(industry);
+    if (!industryCode)
+        return [];
+    try {
+        const res = await axios.get(EM_STOCK_LIST, {
+            params: { fid: 'f3', po: 1, pz: 20, pn: 1, np: 1, fltt: 2, invt: 2,
+                fs: `m:0+t:6+s:${industryCode}`, fields: 'f12,f14' },
+            timeout: 10000
+        });
+        const stocks = res.data?.data?.diff || [];
+        return stocks
+            .filter((s) => s.f12 !== code)
+            .slice(0, 6)
+            .map((s) => ({
+            symbol: s.f12,
+            name: s.f14,
+            industry,
+            market: /^(600|601|603|688)/.test(s.f12) ? '沪A' : '深A'
+        }));
     }
-    return stocks.slice(0, 5);
+    catch (e) {
+        console.error('[findPeerStocks]', industry, e.message);
+        return [];
+    }
+}
+// 根据行业名获取股票（上下游）
+async function getStocksByIndustry(industry) {
+    if (industry === 'Unknown')
+        return [];
+    const industryCode = await findIndustryCode(industry);
+    if (!industryCode)
+        return [];
+    try {
+        const res = await axios.get(EM_STOCK_LIST, {
+            params: { fid: 'f3', po: 1, pz: 20, pn: 1, np: 1, fltt: 2, invt: 2,
+                fs: `m:0+t:6+s:${industryCode}`, fields: 'f12,f14' },
+            timeout: 10000
+        });
+        const stocks = res.data?.data?.diff || [];
+        return stocks.slice(0, 8).map((s) => ({
+            symbol: s.f12,
+            name: s.f14,
+            industry,
+            market: /^(600|601|603|688)/.test(s.f12) ? '沪A' : '深A'
+        }));
+    }
+    catch (e) {
+        console.error('[getStocksByIndustry]', industry, e.message);
+        return [];
+    }
 }
 function getIndustryKeywords(industry) {
     const map = {
@@ -797,19 +861,20 @@ function getIndustryKeywords(industry) {
 }
 // ===== 路由定义 =====
 export async function chainRoutes(app) {
-    // 获取 A股 产业链图
-    app.get('/:symbol/chain', async (req, reply) => {
+    // 获取 A股 产业链图 (两个路径都能访问)
+    const handleChain = async (req, reply) => {
         const { symbol } = req.params;
         const code = symbol.replace(/\D/g, '').slice(0, 6);
         try {
-            const result = buildChainGraph(code);
-            return result;
+            return await buildChainGraph(code);
         }
         catch (err) {
             console.error('China Chain API error:', err);
             return reply.status(500).send({ error: '产业链数据获取失败', message: err.message });
         }
-    });
+    };
+    app.get('/:symbol', handleChain);
+    app.get('/:symbol/chain', handleChain);
     // 获取行业列表
     app.get('/industries', async () => {
         const map = await fetchIndustryList();

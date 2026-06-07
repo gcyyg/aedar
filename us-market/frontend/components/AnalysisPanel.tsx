@@ -1,5 +1,5 @@
 'use client'
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   BarChart3, TrendingUp, Shield, Users, FileText, 
@@ -343,29 +343,42 @@ interface AnalysisButtonsProps {
 
 export default function AnalysisButtons({ symbol, market }: AnalysisButtonsProps) {
   const [activeType, setActiveType] = useState<AnalysisType | null>(null)
-  const [loading, setLoading] = useState<AnalysisType | null>(null)
+  const [loadingStates, setLoadingStates] = useState<Record<AnalysisType, boolean>>({
+    comps: false, dcf: false, lbo: false, competitive: false, audit: false,
+  })
   const [results, setResults] = useState<Record<AnalysisType, AnalysisResult | null>>({
     comps: null, dcf: null, lbo: null, competitive: null, audit: null,
   })
 
-  const runAnalysis = useCallback(async (type: AnalysisType) => {
-    if (results[type]) {
-      setActiveType(activeType === type ? null : type)
-      return
-    }
-    setLoading(type)
-    setActiveType(type)
+  // 加载单个分析
+  const loadAnalysis = useCallback(async (type: AnalysisType) => {
+    if (results[type]) return // 已有结果不重复加载
+    setLoadingStates(prev => ({ ...prev, [type]: true }))
     try {
-      const res = await fetch(`/api/analysis/${type}/${symbol}?market=${market}`)
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 10000)
+      const res = await fetch(`/${market === 'china' ? 'cn/' : ''}api/analysis/${type}/${symbol}?market=${market}`, { signal: controller.signal })
+      clearTimeout(timeoutId)
       if (!res.ok) throw new Error('请求失败')
       const data = await res.json()
       setResults(prev => ({ ...prev, [type]: data }))
-    } catch (e) {
-      console.error('Analysis error:', e)
+    } catch (e: any) {
+      if (e.name === 'AbortError' || e.message?.includes('abort')) {
+        console.error('Analysis timeout:', type)
+      } else {
+        console.error('Analysis error:', e)
+      }
     } finally {
-      setLoading(null)
+      setLoadingStates(prev => ({ ...prev, [type]: false }))
     }
-  }, [symbol, market, results, activeType])
+  }, [symbol, market, results])
+
+  // 股票代码变化时，重置状态
+  useEffect(() => {
+    if (!symbol) return
+    setResults({ comps: null, dcf: null, lbo: null, competitive: null, audit: null })
+    setActiveType(null)
+  }, [symbol])
 
   const currentResult = activeType ? results[activeType] : null
 
@@ -376,21 +389,23 @@ export default function AnalysisButtons({ symbol, market }: AnalysisButtonsProps
         {ANALYSIS_TYPES.map(type => {
           const cfg = ANALYSIS_CONFIGS[type]
           const isActive = activeType === type
-          const isLoading = loading === type
+          const isLoading = loadingStates[type]
+          const hasResult = !!results[type]
           return (
             <button
               key={type}
-              onClick={() => runAnalysis(type)}
+              onClick={() => setActiveType(isActive ? null : type)}
               className="flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium transition-all hover:scale-[1.02]"
               style={{
-                background: isActive ? cfg.bgColor : 'rgba(255,255,255,0.03)',
-                borderColor: isActive ? cfg.borderColor : 'rgba(255,255,255,0.08)',
-                color: isActive ? cfg.color : 'rgba(255,255,255,0.5)',
+                background: isActive ? cfg.bgColor : hasResult ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.02)',
+                borderColor: isActive ? cfg.borderColor : hasResult ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.06)',
+                color: isActive ? cfg.color : hasResult ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.4)',
               }}
             >
               <span>{cfg.icon}</span>
               <span>{cfg.label}</span>
               {isLoading && <Loader2 size={10} className="animate-spin" />}
+              {!isLoading && !hasResult && <span className="w-1.5 h-1.5 rounded-full bg-white/20" />}
             </button>
           )
         })}

@@ -58,6 +58,7 @@ export function calculateScores(data) {
         industryTrackLabel: trackInfo.trackLabel,
         chinaUsMapping,
         summary: [],
+        peerBenchmarks: [],
         price: {
             current: price.current,
             change: price.change,

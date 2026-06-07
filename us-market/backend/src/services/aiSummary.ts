@@ -160,7 +160,7 @@ function formatMarketCap(cap: number): string {
   return cap > 0 ? `$${cap.toLocaleString()}` : '市值N/A'
 }
 
-function generateFallbackSummaries(
+export function generateFallbackSummaries(
   symbol: string,
   name: string,
   cedarScore: number,

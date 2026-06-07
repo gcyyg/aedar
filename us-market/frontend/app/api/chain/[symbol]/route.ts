@@ -1,6 +1,6 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 
-const BACKEND_URL = 'http://localhost:3002'
+const BACKEND_URL = 'http://localhost:3000'
 
 export async function GET(
   request: Request,
@@ -8,9 +8,8 @@ export async function GET(
 ) {
   const symbol = params.symbol
   try {
-    const res = await fetch(`${BACKEND_URL}/api/stock/${encodeURIComponent(symbol)}`, {
-      // @ts-ignore
-      next: { revalidate: 300 }
+    const res = await fetch(`${BACKEND_URL}/api/chain/${encodeURIComponent(symbol)}`, {
+      next: { revalidate: 120 }
     })
     const data = await res.json()
     return NextResponse.json(data)

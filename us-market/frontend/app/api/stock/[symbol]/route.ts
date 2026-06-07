@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 
-const US_BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001'
+const US_BACKEND_URL = process.env.US_BACKEND_URL || 'http://localhost:3000'
 const CHINA_BACKEND_URL = process.env.CHINA_BACKEND_URL || 'http://localhost:3002'
 
 export async function GET(

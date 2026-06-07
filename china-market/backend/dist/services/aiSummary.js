@@ -117,7 +117,7 @@ function formatMarketCap(cap) {
         return `$${(cap / 1e6).toFixed(0)}百万`;
     return cap > 0 ? `$${cap.toLocaleString()}` : '市值N/A';
 }
-function generateFallbackSummaries(symbol, name, cedarScore, cedarLevel, trackScore, growthScore, valuationScore, riskScore, marketTemp, price, industry, industryTrack, maEvaluation, chinaUsMapping) {
+export function generateFallbackSummaries(symbol, name, cedarScore, cedarLevel, trackScore, growthScore, valuationScore, riskScore, marketTemp, price, industry, industryTrack, maEvaluation, chinaUsMapping) {
     const changeSign = price.change >= 0 ? '上涨' : '下跌';
     const peStr = price.pe > 0 ? `PE=${price.pe.toFixed(0)}` : 'PE=N/A';
     const levelMap = { S: '极佳', A: '优秀', B: '良好', C: '一般', D: '较差', AVOID: '建议回避' };

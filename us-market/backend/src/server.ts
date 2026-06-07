@@ -15,7 +15,7 @@ const app = Fastify({
 
 // 插件
 await app.register(cors, { origin: '*' })
-await app.register(rateLimit, { max: 60, timeWindow: '1 minute' })
+await app.register(rateLimit, { max: 200, timeWindow: '1 minute' })
 
 // 健康检查
 app.get('/health', async () => ({ 
